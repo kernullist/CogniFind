@@ -61,18 +61,52 @@ class IndexingWorker(QThread):
         
         # Files currently in database (loaded on startup)
         self.db_files = {}
+        
+        # Incremental scanner state
+        self.scanning_complete = False
+        self.walker = None
+
+    def disk_file_generator(self):
+        """Yields supported file paths from monitored directories one by one."""
+        for directory in self.monitored_dirs:
+            if not directory.exists():
+                continue
+            for root, _, files in os.walk(directory):
+                for file in files:
+                    ext = os.path.splitext(file)[1].lower()
+                    if ext in SUPPORTED_EXTENSIONS:
+                        yield os.path.join(root, file).replace("\\", "/")
+
+    def purge_deleted_files(self):
+        """Quickly checks if indexed files exist on disk, deletes them if they do not."""
+        self.status_changed.emit("cleaning database index...")
+        self.db_files = get_all_indexed_files()
+        deleted_count = 0
+        for filepath_str in list(self.db_files.keys()):
+            if not self.is_running:
+                break
+            if not os.path.exists(filepath_str):
+                delete_document_by_path(filepath_str)
+                deleted_count += 1
+                
+        if deleted_count > 0:
+            print(f"Purged {deleted_count} missing files from DB index.")
+            self.db_files = get_all_indexed_files()
 
     def run(self):
         # Ensure database is initialized
         init_db()
         
-        # Perform initial scan
-        self.status_changed.emit("scanning directories...")
-        self.scan_and_sync()
+        # Pre-initialize scanner state
+        self.purge_deleted_files()
+        self.walker = self.disk_file_generator()
+        self.scanning_complete = False
+        
+        self.status_changed.emit("ready to scan")
         
         # Main event processing loop
         while self.is_running:
-            # 1. Handle debounced files
+            # 1. Handle debounced files (priority!)
             now = time.time()
             files_to_index = []
             with self.lock:
@@ -81,95 +115,82 @@ class IndexingWorker(QThread):
                         files_to_index.append(path_str)
                         del self.debounce_queue[path_str]
             
-            # 2. Add to process queue
             if files_to_index:
                 with self.lock:
                     for f in files_to_index:
                         if f not in self.queue:
                             self.queue.append(f)
             
+            # 2. If queue is empty and we are still scanning, advance directory walk
+            if not self.queue and not self.scanning_complete:
+                self.status_changed.emit("scanning directories...")
+                self.scan_next_batch(batch_size=50)
+            
             # 3. Process the queue
             if self.queue:
-                total = len(self.queue)
-                current = 0
-                while self.queue and self.is_running:
-                    # Pop from queue
-                    with self.lock:
-                        path_str = self.queue.pop(0)
-                    
-                    current += 1
-                    filename = os.path.basename(path_str)
-                    self.status_changed.emit(f"indexing: {filename}")
-                    self.progress_changed.emit(current, total)
-                    
-                    try:
-                        self.index_file(path_str)
-                    except Exception as e:
-                        print(f"Error indexing {path_str}: {e}")
-                        
-                self.status_changed.emit("idle")
-                self.progress_changed.emit(0, 0)
-                self.indexing_finished.emit()
+                with self.lock:
+                    path_str = self.queue.pop(0)
+                
+                filename = os.path.basename(path_str)
+                self.status_changed.emit(f"indexing: {filename}")
+                
+                try:
+                    self.index_file(path_str)
+                except Exception as e:
+                    print(f"Error indexing {path_str}: {e}")
             else:
-                self.status_changed.emit("idle")
-                time.sleep(0.5)
+                if self.scanning_complete:
+                    self.status_changed.emit("idle")
+                time.sleep(0.1)
+
+    def scan_next_batch(self, batch_size=50):
+        """Scans the next N files from the generator and queues them if changed."""
+        count = 0
+        while count < batch_size and self.is_running:
+            try:
+                filepath_str = next(self.walker)
+            except StopIteration:
+                self.scanning_complete = True
+                print("Directory scanning completed.")
+                self.status_changed.emit("scan completed")
+                break
+                
+            count += 1
+            
+            try:
+                path = Path(filepath_str)
+                stat = path.stat()
+                if stat.st_size > MAX_FILE_SIZE_BYTES:
+                    continue
+                    
+                last_mod = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                
+                if filepath_str not in self.db_files:
+                    with self.lock:
+                        if filepath_str not in self.queue:
+                            self.queue.append(filepath_str)
+                else:
+                    db_meta = self.db_files[filepath_str]
+                    if (db_meta['file_size'] != stat.st_size or 
+                            db_meta['last_modified'] != last_mod):
+                        with self.lock:
+                            if filepath_str not in self.queue:
+                                self.queue.append(filepath_str)
+            except Exception as e:
+                print(f"Error checking stat during scan for {filepath_str}: {e}")
+                
+        time.sleep(0.01)
 
     def scan_and_sync(self):
-        """Scans directories, deletes missing files from DB, and queues changed files."""
-        self.db_files = get_all_indexed_files()
-        disk_files = {}
-        
-        for directory in self.monitored_dirs:
-            if not directory.exists():
-                continue
-            
-            # Walk directory recursively
-            for root, _, files in os.walk(directory):
-                for file in files:
-                    ext = os.path.splitext(file)[1].lower()
-                    if ext in SUPPORTED_EXTENSIONS:
-                        filepath = Path(root) / file
-                        filepath_str = str(filepath).replace("\\", "/")
-                        try:
-                            stat = filepath.stat()
-                            if stat.st_size > MAX_FILE_SIZE_BYTES:
-                                continue
-                            disk_files[filepath_str] = {
-                                'last_modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                                'file_size': stat.st_size
-                            }
-                        except Exception as e:
-                            print(f"Error accessing stat for {filepath_str}: {e}")
-                            
-        # 1. Clean up deleted files from database
-        deleted_count = 0
-        for db_path in list(self.db_files.keys()):
-            if db_path not in disk_files:
-                delete_document_by_path(db_path)
-                deleted_count += 1
-                
-        if deleted_count > 0:
-            print(f"Deleted {deleted_count} missing files from DB index.")
-            
-        # 2. Detect new or modified files
-        new_or_modified = []
-        for disk_path, meta in disk_files.items():
-            if disk_path not in self.db_files:
-                new_or_modified.append(disk_path)
-            else:
-                db_meta = self.db_files[disk_path]
-                # Compare modified timestamp and size
-                # Handle potential timestamp formatting variations
-                if (db_meta['file_size'] != meta['file_size'] or 
-                        db_meta['last_modified'] != meta['last_modified']):
-                    new_or_modified.append(disk_path)
-                    
-        # Add to queue
+        """Triggers a manual re-scan by resetting the generator state."""
         with self.lock:
-            self.queue.extend(new_or_modified)
+            self.queue.clear()
+            self.debounce_queue.clear()
+            self.scanning_complete = False
             
-        print(f"Initial scan: queued {len(new_or_modified)} files for indexing.")
-        self.status_changed.emit(f"queued {len(new_or_modified)} files")
+        self.purge_deleted_files()
+        self.walker = self.disk_file_generator()
+        print("Manual scan reset triggered.")
 
     def index_file(self, filepath_str: str):
         """Extracts text, chunks it, generates embeddings with throttling, and updates DB."""
