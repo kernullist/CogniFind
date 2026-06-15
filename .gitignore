@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Databases and Local Storage
+*.db
+*.db-journal
+*.sqlite
+*.log
+.cognifind/
+
+# IDEs
+.vscode/
+.idea/
+
+# Local Test Watch Folder
+test_watch/
