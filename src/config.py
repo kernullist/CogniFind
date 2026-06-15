@@ -26,6 +26,10 @@ DEBOUNCE_DELAY_SEC = 1.0
 # Supported file extensions
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".xlsx"}
 
+# Maximum file size to index (10 MB)
+MAX_FILE_SIZE_MB = 10
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
 def get_default_watch_dirs():
     """Returns a list of default watch directories, focusing on Documents."""
     docs = Path(os.path.expanduser("~")) / "Documents"

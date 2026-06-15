@@ -9,7 +9,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from PySide6.QtCore import QThread, Signal
 
-from src.config import SUPPORTED_EXTENSIONS, DEBOUNCE_DELAY_SEC
+from src.config import SUPPORTED_EXTENSIONS, DEBOUNCE_DELAY_SEC, MAX_FILE_SIZE_BYTES
 from src.database import (
     get_db_connection,
     init_db,
@@ -132,6 +132,8 @@ class IndexingWorker(QThread):
                         filepath_str = str(filepath).replace("\\", "/")
                         try:
                             stat = filepath.stat()
+                            if stat.st_size > MAX_FILE_SIZE_BYTES:
+                                continue
                             disk_files[filepath_str] = {
                                 'last_modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
                                 'file_size': stat.st_size
@@ -179,6 +181,11 @@ class IndexingWorker(QThread):
             
         stat = path.stat()
         file_size = stat.st_size
+        if file_size > MAX_FILE_SIZE_BYTES:
+            print(f"Skipping {filepath_str}: File size ({file_size} bytes) exceeds limit ({MAX_FILE_SIZE_BYTES} bytes).")
+            delete_document_by_path(filepath_str)
+            return
+            
         last_modified = stat.st_mtime
         
         # 1. Extract text
