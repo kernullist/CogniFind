@@ -23,16 +23,20 @@ def extract_text_from_txt(filepath: Path) -> str:
 
 def extract_text_from_pdf(filepath: Path) -> str:
     """Extracts text content from a PDF file."""
-    reader = pypdf.PdfReader(filepath)
     texts = []
-    for page in reader.pages:
-        try:
-            text = page.extract_text()
-            if text:
-                texts.append(text)
-        except Exception as e:
-            print(f"Warning: Failed to extract page text in PDF {filepath}: {e}")
-            continue
+    try:
+        with open(filepath, 'rb') as f:
+            reader = pypdf.PdfReader(f)
+            for page in reader.pages:
+                try:
+                    text = page.extract_text()
+                    if text:
+                        texts.append(text)
+                except Exception as e:
+                    print(f"Warning: Failed to extract page text in PDF {filepath}: {e}")
+                    continue
+    except Exception as e:
+        print(f"Error opening PDF {filepath}: {e}")
     return "\n".join(texts)
 
 def extract_text_from_docx(filepath: Path) -> str:
@@ -57,16 +61,17 @@ def extract_text_from_docx(filepath: Path) -> str:
 def extract_text_from_xlsx(filepath: Path) -> str:
     """Extracts text content from all sheets in an Excel spreadsheet."""
     wb = openpyxl.load_workbook(str(filepath), data_only=True, read_only=True)
-    texts = []
-    
-    for sheet in wb.worksheets:
-        texts.append(f"Sheet: {sheet.title}")
-        for row in sheet.iter_rows(values_only=True):
-            row_text = " ".join([str(val).strip() for val in row if val is not None])
-            if row_text.strip():
-                texts.append(row_text)
-                
-    return "\n".join(texts)
+    try:
+        texts = []
+        for sheet in wb.worksheets:
+            texts.append(f"Sheet: {sheet.title}")
+            for row in sheet.iter_rows(values_only=True):
+                row_text = " ".join([str(val).strip() for val in row if val is not None])
+                if row_text.strip():
+                    texts.append(row_text)
+        return "\n".join(texts)
+    finally:
+        wb.close()
 
 def extract_text(filepath_str: str) -> str:
     """Dispatches text extraction based on file extension."""
