@@ -209,47 +209,36 @@ class IndexingWorker(QThread):
             
         last_modified = stat.st_mtime
         
-        # 1. Extract text
+        # 1. Extract text and prepare chunks
         text = extract_text(filepath_str)
-        if not text.strip():
-            # Empty file: store document metadata only (no chunks)
-            conn = get_db_connection()
-            insert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified)
-            conn.commit()
-            conn.close()
-            return
-            
-        # 2. Chunk text
-        chunks = chunk_text(text)
-        if not chunks:
-            return
-            
-        # 3. Generate embeddings & Insert (with Throttling)
+        chunks = chunk_text(text) if text.strip() else []
+        
+        # 2. Generate embeddings & Insert (within a single atomic transaction)
         conn = get_db_connection()
         try:
-            # Insert document and get ID
-            doc_id = insert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified)
-            
-            # Process chunks in batches to throttle without locking database too long
-            for idx, chunk in enumerate(chunks):
-                # Throttle CPU: Check if user is active
-                self.throttle_cpu()
+            with conn:
+                # Insert document and get ID (deletes old chunks if existing)
+                doc_id = insert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified)
                 
-                # Check if worker was stopped mid-process
-                if not self.is_running:
-                    break
+                # Process and insert chunks & embeddings
+                for idx, chunk in enumerate(chunks):
+                    # Throttle CPU: Check if user is active
+                    self.throttle_cpu()
                     
-                # Generate embedding
-                embedding = self.embedding_engine.get_embedding(chunk)
-                
-                # Insert chunk and embedding
-                chunk_id = insert_chunk(conn, doc_id, idx, chunk)
-                insert_embedding(conn, chunk_id, embedding)
-                
-            conn.commit()
+                    # If worker was stopped mid-process, raise exception to trigger transaction rollback
+                    if not self.is_running:
+                        raise InterruptedError("Indexing worker was stopped by user.")
+                        
+                    # Generate embedding
+                    embedding = self.embedding_engine.get_embedding(chunk)
+                    
+                    # Insert chunk and embedding
+                    chunk_id = insert_chunk(conn, doc_id, idx, chunk)
+                    insert_embedding(conn, chunk_id, embedding)
+        except InterruptedError:
+            print(f"Indexing interrupted for {filepath_str}. Database transaction rolled back.")
         except Exception as e:
-            conn.rollback()
-            raise e
+            print(f"Error indexing {filepath_str}: {e}")
         finally:
             conn.close()
 
