@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QListWidget, QListWidgetItem, QLabel, QSystemTrayIcon,
     QMenu, QGraphicsDropShadowEffect, QFrame
 )
-from PySide6.QtCore import Qt, QEvent, Slot, QSize
+from PySide6.QtCore import Qt, QEvent, Slot, QSize, QThread
 from PySide6.QtGui import QIcon, QPainter, QColor, QPen, QPixmap, QFont, QKeySequence
 
 from src.config import SUPPORTED_EXTENSIONS, get_default_watch_dirs
@@ -418,8 +418,8 @@ class SystemTrayApp:
         
     def start(self):
         self.tray_icon.show()
-        # Start background index worker thread
-        self.worker.start()
+        # Start background index worker thread with IdlePriority to prevent system lag
+        self.worker.start(QThread.IdlePriority)
         # Start file monitor observer
         self.watcher.start()
 
