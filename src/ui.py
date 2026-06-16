@@ -2,13 +2,13 @@ import os
 import sys
 import ctypes
 from ctypes import wintypes
-from datetime import datetime
+from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QListWidget, QListWidgetItem, QLabel, QSystemTrayIcon,
-    QMenu, QGraphicsDropShadowEffect, QFrame
+    QMenu, QGraphicsDropShadowEffect, QFrame, QComboBox
 )
-from PySide6.QtCore import Qt, QEvent, Slot, QSize, QThread
+from PySide6.QtCore import Qt, QEvent, Slot, QSize, QThread, QTimer
 from PySide6.QtGui import QIcon, QPainter, QColor, QPen, QPixmap, QFont, QKeySequence
 
 from src.config import SUPPORTED_EXTENSIONS, get_default_watch_dirs
@@ -151,6 +151,11 @@ class SearchWindow(QMainWindow):
         super().__init__()
         self.embedding_engine = embedding_engine
         
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)
+        self._search_timer.timeout.connect(self._execute_search)
+        
         # Configure frameless, transparent window
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -203,6 +208,41 @@ class SearchWindow(QMainWindow):
         self.search_input.returnPressed.connect(self.open_selected_file)
         search_layout.addWidget(self.search_input)
         main_layout.addLayout(search_layout)
+        
+        # Filter row: date range + extension
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(8)
+        
+        self.date_filter = QComboBox()
+        self.date_filter.addItems(["All Time", "Today", "This Week", "This Month"])
+        self.date_filter.setFont(QFont("Segoe UI", 9))
+        self.date_filter.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                color: #d1d5db;
+                padding: 4px 10px;
+            }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView {
+                background-color: #1f1f23;
+                color: #d1d5db;
+                selection-background-color: rgba(139, 92, 246, 0.3);
+            }
+        """)
+        self.date_filter.currentIndexChanged.connect(lambda _: self._search_timer.start())
+        filter_layout.addWidget(self.date_filter)
+        
+        self.ext_filter = QComboBox()
+        self.ext_filter.addItems(["All Types", ".pdf", ".docx", ".xlsx", ".txt", ".md"])
+        self.ext_filter.setFont(QFont("Segoe UI", 9))
+        self.ext_filter.setStyleSheet(self.date_filter.styleSheet())
+        self.ext_filter.currentIndexChanged.connect(lambda _: self._search_timer.start())
+        filter_layout.addWidget(self.ext_filter)
+        
+        filter_layout.addStretch()
+        main_layout.addLayout(filter_layout)
         
         # Separator Line
         sep = QFrame()
@@ -319,17 +359,30 @@ class SearchWindow(QMainWindow):
     def on_search_text_changed(self, text):
         query = text.strip()
         if not query:
+            self._search_timer.stop()
             self.results_list.clear()
             return
+        self._search_timer.start()
+
+    def _execute_search(self):
+        query = self.search_input.text().strip()
+        if not query:
+            self.results_list.clear()
+            return
+        
+        date_from, date_to = self._get_date_range()
+        exts = self._get_selected_extensions()
             
         try:
-            # 1. Generate embedding for query
             query_vector = self.embedding_engine.get_embedding(query)
+            results = query_similar_documents(
+                query_vector,
+                limit=5,
+                file_extensions=exts,
+                date_from=date_from,
+                date_to=date_to
+            )
             
-            # 2. Query DB
-            results = query_similar_documents(query_vector, limit=5)
-            
-            # 3. Update UI
             self.results_list.clear()
             for item in results:
                 list_item = QListWidgetItem(self.results_list)
@@ -338,11 +391,30 @@ class SearchWindow(QMainWindow):
                 widget = SearchResultWidget(item)
                 self.results_list.setItemWidget(list_item, widget)
                 
-            # Select first item by default
             if self.results_list.count() > 0:
                 self.results_list.setCurrentRow(0)
         except Exception as e:
             print(f"Search error: {e}")
+
+    def _get_date_range(self) -> tuple:
+        idx = self.date_filter.currentIndex()
+        now = datetime.now()
+        if idx == 1:
+            date_from = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            return date_from, None
+        elif idx == 2:
+            date_from = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+            return date_from, None
+        elif idx == 3:
+            date_from = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+            return date_from, None
+        return None, None
+
+    def _get_selected_extensions(self) -> list:
+        idx = self.ext_filter.currentIndex()
+        if idx == 0:
+            return None
+        return [self.ext_filter.itemText(idx)]
 
     def open_selected_file(self):
         """Opens the selected file on disk using default Windows application."""

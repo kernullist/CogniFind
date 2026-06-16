@@ -33,8 +33,8 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 def get_default_watch_dirs():
     """Returns a list of default watch directories, focusing on Documents."""
     docs = Path(os.path.expanduser("~")) / "Documents"
-    # Create a local test folder for safety/testing as well
-    test_watch = Path("C:/git/CogniFind/test_watch")
+    project_root = Path(__file__).resolve().parent.parent
+    test_watch = project_root / "test_watch"
     test_watch.mkdir(parents=True, exist_ok=True)
     
     dirs = []

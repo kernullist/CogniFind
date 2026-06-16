@@ -34,11 +34,7 @@ def get_idle_duration() -> float:
     last_input_info.cbSize = ctypes.sizeof(last_input_info)
     if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(last_input_info)):
         current_tick = ctypes.windll.kernel32.GetTickCount()
-        # Handle tick overflow (occurs after 49.7 days)
-        elapsed_millis = current_tick - last_input_info.dwTime
-        if elapsed_millis < 0:
-            # Simple fallback on overflow
-            elapsed_millis = 0
+        elapsed_millis = (current_tick - last_input_info.dwTime) & 0xFFFFFFFF
         return elapsed_millis / 1000.0
     return 0.0
 

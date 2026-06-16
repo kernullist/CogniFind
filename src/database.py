@@ -10,6 +10,8 @@ def get_db_connection():
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -142,7 +144,7 @@ def get_all_indexed_files() -> dict[str, dict]:
     conn.close()
     return results
 
-def query_similar_documents(query_vector: list[float], limit: int = 5, file_extensions: list[str] = None) -> list[dict]:
+def query_similar_documents(query_vector: list[float], limit: int = 5, file_extensions: list[str] = None, date_from: str = None, date_to: str = None) -> list[dict]:
     """Performs KNN vector similarity search joined with document metadata."""
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -171,8 +173,16 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
         exts_placeholders = ",".join("?" for _ in file_extensions)
         sql += f" AND d.file_extension IN ({exts_placeholders})"
         params.extend([ext.lower() for ext in file_extensions])
+    
+    if date_from:
+        sql += " AND d.last_modified >= ?"
+        params.append(date_from)
+    
+    if date_to:
+        sql += " AND d.last_modified <= ?"
+        params.append(date_to)
         
-    sql += " ORDER BY similarity DESC"
+    sql += " ORDER BY ce.distance ASC"
     
     cursor.execute(sql, params)
     
