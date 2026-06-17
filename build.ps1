@@ -14,7 +14,7 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Step 1: Check prerequisites
-Write-Host "[1/5] Checking prerequisites..." -ForegroundColor Yellow
+Write-Host "[1/6] Checking prerequisites..." -ForegroundColor Yellow
 $missing = @()
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) { $missing += "python" }
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { $missing += "node" }
@@ -28,7 +28,7 @@ if ($missing.Count -gt 0) {
 Write-Host "  All prerequisites OK." -ForegroundColor Green
 
 # Step 2: Install PyInstaller if needed
-Write-Host "[2/5] Ensuring PyInstaller is installed..." -ForegroundColor Yellow
+Write-Host "[2/6] Ensuring PyInstaller is installed..." -ForegroundColor Yellow
 $pipResult = python -m pip show pyinstaller 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  Installing PyInstaller..." -ForegroundColor Gray
@@ -37,7 +37,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "  PyInstaller OK." -ForegroundColor Green
 
 # Step 3: Build Python backend with PyInstaller
-Write-Host "[3/5] Building Python backend (PyInstaller)..." -ForegroundColor Yellow
+Write-Host "[3/6] Building Python backend (PyInstaller)..." -ForegroundColor Yellow
 Push-Location $ROOT
 try {
     python -m PyInstaller cognifind-backend.spec --clean --noconfirm
@@ -64,7 +64,7 @@ Copy-Item $PYEXE $DEST -Force
 Write-Host "  Backend built: $DEST" -ForegroundColor Green
 
 # Step 4: Install npm dependencies
-Write-Host "[4/5] Installing frontend dependencies..." -ForegroundColor Yellow
+Write-Host "[4/6] Installing frontend dependencies..." -ForegroundColor Yellow
 Push-Location (Join-Path $ROOT "frontend")
 try {
     npm install --silent
@@ -77,8 +77,23 @@ try {
 }
 Write-Host "  Frontend dependencies OK." -ForegroundColor Green
 
-# Step 5: Build Tauri application
-Write-Host "[5/5] Building Tauri application..." -ForegroundColor Yellow
+# Step 5: Fetch embedding models for offline bundling
+Write-Host "[5/6] Fetching embedding models (offline bundle)..." -ForegroundColor Yellow
+$MODELS_DIR = Join-Path $TAURI_DIR "resources\models"
+Push-Location $ROOT
+try {
+    python scripts\fetch_models.py "$MODELS_DIR"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Model fetch failed!" -ForegroundColor Red
+        exit 1
+    }
+} finally {
+    Pop-Location
+}
+Write-Host "  Models ready: $MODELS_DIR" -ForegroundColor Green
+
+# Step 6: Build Tauri application
+Write-Host "[6/6] Building Tauri application..." -ForegroundColor Yellow
 Push-Location (Join-Path $ROOT "frontend")
 try {
     npx tauri build

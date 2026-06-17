@@ -66,7 +66,7 @@ npm install
 
 ## How it Works
 
-1. **Pre-heating**: On startup, the Python backend pre-heats the local embedding engine. It downloads the all-MiniLM-L6-v2 ONNX model and tokenizer from the Hugging Face Hub if they are not already cached locally in your home directory (~/.cognifind/models/).
+1. **Pre-heating**: On startup, the Python backend loads the local embedding engine in a background thread (so the UI stays responsive and can show a download progress bar). It resolves model files in this order: the per-user cache (`~/.cognifind/models/`), then the models bundled with the installer (offline), and only then a download from the Hugging Face Hub if downloads are enabled. Production builds bundle the models and run fully offline by default.
 2. **Directory Scanning**: Scans watched directories (configured in SQLite/settings, defaulting to your Documents directory and a local test_watch folder). It deletes records of removed files and queues new or modified files.
 3. **Chunking & Embeddings**: Extracts text from documents, splits it into 500-character chunks with a 50-character overlap, converts them into 384-dimensional normalized vectors via ONNX Runtime, and saves them in the local database (~/.cognifind/contextfinder.db).
 4. **Vector Searching**: When you type a query, it is embedded into a vector, and a K-Nearest Neighbors (KNN) search is executed on the sqlite-vec virtual table using cosine distance.
@@ -171,9 +171,15 @@ This script will:
 
 1. Build the Python backend with PyInstaller (~90MB)
 2. Copy the backend executable to Tauri's binaries directory
-3. Build the React frontend with Vite
-4. Compile the Tauri application
-5. Generate installers (NSIS and MSI)
+3. Install frontend dependencies
+4. Fetch embedding models into `frontend/src-tauri/resources/models` for offline bundling (`scripts/fetch_models.py`)
+5. Compile the Tauri application (bundling the models as resources)
+6. Generate installers (NSIS and MSI)
+
+The bundled models make the installer larger but let the app run fully offline —
+no model download at runtime. The shipped backend has downloads disabled by
+default (`ALLOW_MODEL_DOWNLOAD=False`); set `COGNIFIND_ALLOW_DOWNLOAD=1` to
+re-enable on-demand downloads.
 
 Output files will be in `frontend/src-tauri/target/release/bundle/`.
 

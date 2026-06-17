@@ -5,7 +5,7 @@ import onnxruntime as ort
 import requests
 from tokenizers import Tokenizer
 from huggingface_hub import hf_hub_download, hf_hub_url, get_hf_file_metadata
-from src.config import MODEL_DIR, DEFAULT_MODEL_KEY, get_model_config
+from src.config import MODEL_DIR, BUNDLED_MODELS_DIR, ALLOW_MODEL_DOWNLOAD, DEFAULT_MODEL_KEY, get_model_config
 
 
 def _download_with_progress(repo: str, filename: str, dest_path, progress_cb):
@@ -79,31 +79,47 @@ class EmbeddingEngine:
         self._lock = threading.Lock()
 
     def _ensure_model_files(self):
-        """Downloads the ONNX model and tokenizer.json if not present locally.
+        """Resolves the ONNX model and tokenizer paths for this model.
 
-        Each model is cached under its own subdirectory so different models do
-        not collide on the shared onnx/model.onnx and tokenizer.json names.
+        Resolution order: per-user cache (previously downloaded), then bundled
+        models (offline deployment), then a network download into the cache if
+        downloads are allowed. Each model lives under its own subdirectory so
+        different models do not collide on the shared onnx/model.onnx and
+        tokenizer.json names.
         """
-        model_root = MODEL_DIR / self.model_key
         onnx_file = self.cfg["onnx_file"]
         tokenizer_file = self.cfg["tokenizer_file"]
 
-        model_onnx_path = model_root / onnx_file
-        tokenizer_json_path = model_root / tokenizer_file
+        # 1. Per-user cache.
+        cache_root = MODEL_DIR / self.model_key
+        if (cache_root / onnx_file).exists() and (cache_root / tokenizer_file).exists():
+            return str(cache_root / onnx_file), str(cache_root / tokenizer_file)
 
-        # Ensure target directories exist (onnx_file may contain a subdir).
+        # 2. Bundled models (used directly, no copy) for offline operation.
+        bundled_root = BUNDLED_MODELS_DIR / self.model_key
+        if (bundled_root / onnx_file).exists() and (bundled_root / tokenizer_file).exists():
+            return str(bundled_root / onnx_file), str(bundled_root / tokenizer_file)
+
+        # 3. Download into the cache, if permitted.
+        if not ALLOW_MODEL_DOWNLOAD:
+            raise FileNotFoundError(
+                f"Embedding model '{self.model_key}' is not bundled or cached and "
+                f"downloads are disabled. Expected files under {bundled_root}."
+            )
+
+        repo = self.cfg["repo"]
+        model_onnx_path = cache_root / onnx_file
+        tokenizer_json_path = cache_root / tokenizer_file
         model_onnx_path.parent.mkdir(parents=True, exist_ok=True)
         tokenizer_json_path.parent.mkdir(parents=True, exist_ok=True)
 
-        repo = self.cfg["repo"]
-
         if not model_onnx_path.exists():
             print(f"Downloading ONNX model '{self.model_key}' from {repo}...")
-            self._fetch(repo, onnx_file, model_root, model_onnx_path)
+            self._fetch(repo, onnx_file, cache_root, model_onnx_path)
 
         if not tokenizer_json_path.exists():
             print(f"Downloading tokenizer for '{self.model_key}' from {repo}...")
-            self._fetch(repo, tokenizer_file, model_root, tokenizer_json_path)
+            self._fetch(repo, tokenizer_file, cache_root, tokenizer_json_path)
 
         return str(model_onnx_path), str(tokenizer_json_path)
 

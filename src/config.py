@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 # Base App Data Directory
@@ -8,9 +9,31 @@ APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 # Database path
 DB_PATH = APP_DATA_DIR / "contextfinder.db"
 
-# Model directory
+# Per-user model cache (downloaded models live here).
 MODEL_DIR = APP_DATA_DIR / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+# Bundled model location for offline deployment. In production the Tauri shell
+# passes COGNIFIND_MODELS_DIR pointing at the installed resources/models dir; in
+# a PyInstaller onefile build we fall back to the extracted _MEIPASS/models; in
+# dev we use the project-root ./models populated by scripts/fetch_models.py.
+FROZEN = getattr(sys, "frozen", False)
+_env_models = os.environ.get("COGNIFIND_MODELS_DIR")
+if _env_models:
+    BUNDLED_MODELS_DIR = Path(_env_models)
+elif FROZEN:
+    BUNDLED_MODELS_DIR = Path(getattr(sys, "_MEIPASS", ".")) / "models"
+else:
+    BUNDLED_MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+
+# Whether the app may download models that are not bundled or cached. Disabled in
+# the shipped (frozen) app for fully offline operation; overridable via env
+# COGNIFIND_ALLOW_DOWNLOAD=1/0.
+_env_dl = os.environ.get("COGNIFIND_ALLOW_DOWNLOAD")
+if _env_dl is not None:
+    ALLOW_MODEL_DOWNLOAD = _env_dl == "1"
+else:
+    ALLOW_MODEL_DOWNLOAD = not FROZEN
 
 # Embedding model registry.
 # Each model is downloaded as an ONNX file + tokenizer.json from the Hugging
