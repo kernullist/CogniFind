@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from threading import Thread
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
@@ -90,7 +90,9 @@ class SearchRequest(BaseModel):
     date_from: str | None = None
     date_to: str | None = None
     extensions: list[str] | None = None
-    limit: int = 5
+    # Bound the result count: limit <= 0 would make the KNN k=0 (a sqlite-vec
+    # error) and an unbounded value could return a huge response.
+    limit: int = Field(default=5, ge=1, le=50)
 
 
 class SettingsRequest(BaseModel):

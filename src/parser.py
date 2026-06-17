@@ -11,8 +11,14 @@ def clean_whitespace(text: str) -> str:
     return text.strip()
 
 def extract_text_from_txt(filepath: Path) -> str:
-    """Reads a text or markdown file, trying different encodings."""
-    encodings = ['utf-8', 'cp949', 'euc-kr', 'latin1', 'utf-16']
+    """Reads a text or markdown file, trying different encodings.
+
+    Order matters: utf-8-sig handles UTF-8 with or without a BOM, utf-16 is
+    tried (BOM-aware) before latin1, and latin1 is kept LAST as the catch-all.
+    latin1 never raises UnicodeDecodeError, so anything placed after it would be
+    unreachable and real UTF-16 files would be silently mangled.
+    """
+    encodings = ['utf-8-sig', 'utf-16', 'cp949', 'euc-kr', 'latin1']
     for encoding in encodings:
         try:
             with open(filepath, 'r', encoding=encoding) as f:
@@ -94,19 +100,25 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
     text = clean_whitespace(text)
     if not text:
         return []
-        
+
+    # Guard against a misconfiguration where overlap >= chunk_size, which would
+    # make the step non-positive and loop forever.
+    step = chunk_size - overlap
+    if step <= 0:
+        step = chunk_size
+
     chunks = []
     start = 0
     text_len = len(text)
-    
+
     while start < text_len:
         end = start + chunk_size
         chunk = text[start:end]
         chunks.append(chunk)
-        
+
         if end >= text_len:
             break
-            
-        start += (chunk_size - overlap)
-        
+
+        start += step
+
     return chunks
