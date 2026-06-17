@@ -31,6 +31,8 @@ hidden_imports = [
     'sqlite_vec',
     'tokenizers',
     'huggingface_hub',
+    'requests',
+    'certifi',
     'numpy',
     'pypdf',
     'docx',
