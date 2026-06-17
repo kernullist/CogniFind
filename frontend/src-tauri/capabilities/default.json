@@ -12,6 +12,7 @@
     "shell:allow-stdin-write",
     "shell:allow-kill",
     "global-shortcut:default",
-    "os:default"
+    "os:default",
+    "dialog:default"
   ]
 }

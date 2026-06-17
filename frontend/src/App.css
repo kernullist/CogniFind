@@ -8,7 +8,7 @@ html, body, #root {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background: transparent;
+  background: #0f0f12;
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
@@ -16,9 +16,7 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: rgba(15, 15, 18, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
+  background-color: #0f0f12;
   padding: 16px;
   gap: 10px;
   overflow: hidden;

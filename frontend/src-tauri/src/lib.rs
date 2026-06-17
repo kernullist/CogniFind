@@ -5,6 +5,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
@@ -105,6 +106,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState {
             backend_child: Mutex::new(None),
@@ -181,12 +183,28 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // On close (top-right X), ask whether to minimize to the tray.
+            // Yes -> hide to tray, No -> stop the backend and quit.
+            // Focus-out no longer auto-hides; the window behaves like a normal one.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                window.hide().unwrap();
-            }
-            if let tauri::WindowEvent::Focused(false) = event {
-                window.hide().unwrap();
+                let win = window.clone();
+                window
+                    .app_handle()
+                    .dialog()
+                    .message("CogniFind를 트레이로 보낼까요?\n'아니오'를 누르면 완전히 종료됩니다.")
+                    .title("CogniFind")
+                    .buttons(MessageDialogButtons::YesNo)
+                    .show(move |send_to_tray| {
+                        if send_to_tray {
+                            let _ = win.hide();
+                        }
+                        else {
+                            let state = win.app_handle().state::<AppState>();
+                            stop_backend_sidecar(&state);
+                            win.app_handle().exit(0);
+                        }
+                    });
             }
         })
         .invoke_handler(tauri::generate_handler![toggle_search_window])
