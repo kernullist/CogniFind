@@ -23,3 +23,19 @@ pip-delete-this-directory.txt
 
 # Local Test Watch Folder
 test_watch/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Node.js / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Tauri build artifacts
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+
+# Sidecar binary (built artifact)
+frontend/src-tauri/binaries/*.exe
