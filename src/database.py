@@ -130,6 +130,23 @@ def delete_document_by_path(file_path: str):
     conn.commit()
     conn.close()
 
+def is_document_indexed(file_path: str) -> bool:
+    """Returns True if the given file path exists in the documents index.
+
+    Used to restrict the open-file endpoint to files the app actually indexed,
+    so an arbitrary local origin cannot launch any path on disk. Matching is
+    done via the path hash id, which normalizes slashes and case the same way
+    insert_document does.
+    """
+    doc_id = get_file_hash_id(file_path)
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM documents WHERE id = ? LIMIT 1", (doc_id,))
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
 def get_all_indexed_files() -> dict[str, dict]:
     """Returns a dict mapping file_path to its modification time and size."""
     conn = get_db_connection()

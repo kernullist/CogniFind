@@ -11,7 +11,13 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
 from src.embedding import EmbeddingEngine
-from src.database import init_db, get_monitored_dirs, save_monitored_dirs, query_similar_documents
+from src.database import (
+    init_db,
+    get_monitored_dirs,
+    save_monitored_dirs,
+    query_similar_documents,
+    is_document_indexed,
+)
 from src.watcher import IndexingWorker, WatcherManager
 
 
@@ -82,8 +88,11 @@ class SettingsRequest(BaseModel):
     monitored_dirs: list[str]
 
 
+# Defined as a plain (non-async) function so FastAPI runs it in its worker
+# threadpool. Embedding is CPU-bound and the DB call is blocking; running them
+# directly on the event loop would stall status polling and other requests.
 @app.post("/api/search")
-async def search(req: SearchRequest):
+def search(req: SearchRequest):
     if not req.query.strip():
         return []
     try:
@@ -111,8 +120,10 @@ async def get_settings():
     return {"monitored_dirs": dirs}
 
 
+# Non-async: stopping the worker blocks on QThread.wait(), which must not run
+# on the event loop. FastAPI dispatches sync handlers to the threadpool.
 @app.put("/api/settings")
-async def update_settings(req: SettingsRequest):
+def update_settings(req: SettingsRequest):
     global worker, watcher
 
     save_monitored_dirs(req.monitored_dirs)
@@ -141,7 +152,11 @@ async def trigger_rescan():
 
 
 @app.post("/api/open-file")
-async def open_file(path: str):
+def open_file(path: str):
+    # Only launch files we actually indexed. CORS is open, so without this any
+    # local origin could trigger os.startfile on an arbitrary path.
+    if not is_document_indexed(path):
+        raise HTTPException(status_code=403, detail="Path is not an indexed document")
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
     try:
