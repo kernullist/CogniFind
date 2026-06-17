@@ -107,7 +107,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState {
             backend_child: Mutex::new(None),
             backend_local: Mutex::new(None),
@@ -127,23 +126,27 @@ pub fn run() {
 
             std::thread::sleep(std::time::Duration::from_secs(2));
 
-            let app_handle2 = app.handle().clone();
-            app.handle().plugin(
-                tauri_plugin_global_shortcut::Builder::new()
-                    .with_shortcuts(["Alt+Super+F"])
-                    .unwrap()
-                    .with_handler(move |_app, shortcut, event| {
-                        if event.state == ShortcutState::Pressed {
-                            let shortcut_str = format!("{:?}", shortcut);
-                            if shortcut_str.contains("'F'") || shortcut_str.contains("KeyF") {
-                                if let Some(window) = app_handle2.get_webview_window("main") {
-                                    toggle_window(&window);
-                                }
+            // Register the global shortcut exactly once, non-fatally: if the
+            // hotkey is already taken (e.g. by another app or a leftover
+            // instance), log and continue instead of aborting setup, which
+            // would close the app.
+            let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcuts(["Alt+Super+F"])
+                .unwrap()
+                .with_handler(|app, shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let shortcut_str = format!("{:?}", shortcut);
+                        if shortcut_str.contains("'F'") || shortcut_str.contains("KeyF") {
+                            if let Some(window) = app.get_webview_window("main") {
+                                toggle_window(&window);
                             }
                         }
-                    })
-                    .build(),
-            )?;
+                    }
+                })
+                .build();
+            if let Err(e) = app.handle().plugin(shortcut_plugin) {
+                log::error!("Failed to register global shortcut Alt+Super+F: {}", e);
+            }
 
             let quit_item = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
             let scan_item = MenuItem::with_id(app, "scan", "Re-index Now", true, None::<&str>)?;
