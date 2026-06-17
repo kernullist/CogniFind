@@ -2,7 +2,7 @@ import sys
 import os
 import asyncio
 from contextlib import asynccontextmanager
-from threading import Thread
+from threading import Thread, Lock
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -29,7 +29,21 @@ qt_app = None
 embedding_engine = None
 worker = None
 watcher = None
-worker_status = "idle"
+worker_status = "starting"
+shutting_down = False
+
+# Shared embedding-model / download state, polled by the UI via /api/status.
+model_lock = Lock()
+model_state = {
+    "ready": False,
+    "downloading": False,
+    "model": None,
+    "file": None,
+    "percent": 0.0,
+    "downloaded": 0,
+    "total": 0,
+    "error": None,
+}
 
 
 def on_status_changed(status):
@@ -37,34 +51,80 @@ def on_status_changed(status):
     worker_status = status
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global qt_app, embedding_engine, worker, watcher, worker_status
+def on_download_progress(model_key, filename, downloaded, total):
+    """Called from EmbeddingEngine during a model download."""
+    with model_lock:
+        model_state.update(
+            downloading=True,
+            ready=False,
+            model=model_key,
+            file=filename,
+            downloaded=downloaded,
+            total=total,
+            percent=(downloaded / total * 100.0) if total else 0.0,
+        )
 
-    qt_app = QApplication.instance() or QApplication([])
 
-    init_db()
+def _set_model_state(**kwargs):
+    with model_lock:
+        model_state.update(kwargs)
+
+
+def _start_indexing(engine, monitored_dirs):
+    """Creates and starts the worker + watcher for the given engine/dirs."""
+    global worker, watcher
+    worker = IndexingWorker(engine, monitored_dirs)
+    worker.status_changed.connect(on_status_changed)
+    watcher = WatcherManager(monitored_dirs, worker)
+    worker.start(QThread.IdlePriority)
+    watcher.start()
+
+
+def _init_engine_background():
+    """Builds the active embedding engine (downloading if needed) off the main
+    thread so the API server is responsive and can report download progress."""
+    global embedding_engine, worker_status
 
     active_model = get_active_model_key()
-    print(f"Pre-heating Embedding Engine (model: {active_model})...")
-    embedding_engine = EmbeddingEngine(active_model)
+    print(f"Loading embedding model '{active_model}'...")
+    _set_model_state(ready=False, downloading=False, model=active_model,
+                     file=None, percent=0.0, downloaded=0, total=0, error=None)
+    try:
+        engine = EmbeddingEngine(active_model, progress_callback=on_download_progress)
+    except Exception as e:
+        print(f"Failed to load model '{active_model}': {e}")
+        _set_model_state(downloading=False, error=str(e))
+        worker_status = "model load failed"
+        return
+
+    embedding_engine = engine
+    _set_model_state(ready=True, downloading=False, percent=100.0, error=None)
+
+    if shutting_down:
+        return
 
     monitored_dirs = get_monitored_dirs()
     print(f"Monitored directories: {monitored_dirs}")
+    _start_indexing(engine, monitored_dirs)
 
-    worker = IndexingWorker(embedding_engine, monitored_dirs)
-    worker.status_changed.connect(on_status_changed)
 
-    watcher = WatcherManager(monitored_dirs, worker)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global qt_app, shutting_down
 
-    worker.start(QThread.IdlePriority)
-    watcher.start()
+    qt_app = QApplication.instance() or QApplication([])
+    init_db()
+
+    # Load the model in the background so the server starts serving immediately
+    # and the UI can poll /api/status to render the download progress bar.
+    Thread(target=_init_engine_background, daemon=True).start()
 
     print("ContextFinder API server started.")
 
     yield
 
     print("Shutting down...")
+    shutting_down = True
     if watcher:
         watcher.stop()
     if worker:
@@ -115,6 +175,8 @@ class ModelRequest(BaseModel):
 def search(req: SearchRequest):
     if not req.query.strip():
         return []
+    if embedding_engine is None:
+        raise HTTPException(status_code=503, detail="Embedding model is still loading")
     try:
         query_vector = embedding_engine.get_embedding(req.query.strip(), is_query=True)
         results = query_similar_documents(
@@ -131,7 +193,9 @@ def search(req: SearchRequest):
 
 @app.get("/api/status")
 async def get_status():
-    return {"status": worker_status}
+    with model_lock:
+        model_info = dict(model_state)
+    return {"status": worker_status, "model": model_info}
 
 
 @app.get("/api/settings")
@@ -161,11 +225,7 @@ def update_settings(req: SettingsRequest):
             pass
 
     monitored_dirs = req.monitored_dirs
-    worker = IndexingWorker(embedding_engine, monitored_dirs)
-    worker.status_changed.connect(on_status_changed)
-    watcher = WatcherManager(monitored_dirs, worker)
-    worker.start(QThread.IdlePriority)
-    watcher.start()
+    _start_indexing(embedding_engine, monitored_dirs)
 
     return {"monitored_dirs": monitored_dirs}
 
@@ -193,12 +253,17 @@ def set_model(req: ModelRequest):
     if req.model_key == get_active_model_key():
         return {"active": req.model_key, "changed": False}
 
-    # Build the new engine first (may download the model). If this fails we have
-    # not yet touched the existing index.
+    # Build the new engine first (may download the model; progress is reported
+    # via /api/status). If this fails we have not yet touched the existing index,
+    # and the old engine keeps serving search.
+    _set_model_state(ready=False, downloading=False, model=req.model_key,
+                     file=None, percent=0.0, downloaded=0, total=0, error=None)
     try:
-        new_engine = EmbeddingEngine(req.model_key)
+        new_engine = EmbeddingEngine(req.model_key, progress_callback=on_download_progress)
     except Exception as e:
+        _set_model_state(downloading=False, error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to load model: {e}")
+    _set_model_state(ready=True, downloading=False, percent=100.0, error=None)
 
     # Stop indexing before swapping the engine and wiping the index.
     if watcher:
@@ -217,12 +282,7 @@ def set_model(req: ModelRequest):
     clear_index(new_engine.dim)
     embedding_engine = new_engine
 
-    monitored_dirs = get_monitored_dirs()
-    worker = IndexingWorker(embedding_engine, monitored_dirs)
-    worker.status_changed.connect(on_status_changed)
-    watcher = WatcherManager(monitored_dirs, worker)
-    worker.start(QThread.IdlePriority)
-    watcher.start()
+    _start_indexing(embedding_engine, get_monitored_dirs())
 
     return {"active": req.model_key, "changed": True}
 

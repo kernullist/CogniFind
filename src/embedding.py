@@ -2,17 +2,59 @@ import os
 import threading
 import numpy as np
 import onnxruntime as ort
+import requests
 from tokenizers import Tokenizer
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, hf_hub_url, get_hf_file_metadata
 from src.config import MODEL_DIR, DEFAULT_MODEL_KEY, get_model_config
 
+
+def _download_with_progress(repo: str, filename: str, dest_path, progress_cb):
+    """Streams a Hub file to dest_path, reporting (downloaded, total) bytes.
+
+    Writes to a .part file and atomically renames on success, so an interrupted
+    download never leaves a truncated file that would be skipped on retry.
+    """
+    url = hf_hub_url(repo_id=repo, filename=filename)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = dest_path.with_name(dest_path.name + ".part")
+
+    # Resolve the true (uncompressed) file size up front. The streaming response
+    # may omit Content-Length (e.g. for gzip-served, non-LFS files), so rely on
+    # the Hub metadata for a reliable progress denominator; fall back to 0.
+    try:
+        total = get_hf_file_metadata(url).size or 0
+    except Exception:
+        total = 0
+
+    with requests.get(url, stream=True, timeout=60) as resp:
+        resp.raise_for_status()
+        if not total:
+            total = int(resp.headers.get("Content-Length", 0))
+        downloaded = 0
+        if progress_cb:
+            progress_cb(downloaded, total)
+        with open(tmp_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 20):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                downloaded += len(chunk)
+                if progress_cb:
+                    progress_cb(downloaded, total)
+
+    os.replace(tmp_path, dest_path)
+
+
 class EmbeddingEngine:
-    def __init__(self, model_key: str = DEFAULT_MODEL_KEY):
+    def __init__(self, model_key: str = DEFAULT_MODEL_KEY, progress_callback=None):
         self.model_key = model_key
         self.cfg = get_model_config(model_key)
         self.dim = self.cfg["dim"]
         self.query_prefix = self.cfg["query_prefix"]
         self.passage_prefix = self.cfg["passage_prefix"]
+        # Optional callback(model_key, filename, downloaded_bytes, total_bytes)
+        # invoked during downloads so the UI can render a progress bar.
+        self.progress_callback = progress_callback
 
         self.model_path, self.tokenizer_path = self._ensure_model_files()
 
@@ -57,13 +99,30 @@ class EmbeddingEngine:
 
         if not model_onnx_path.exists():
             print(f"Downloading ONNX model '{self.model_key}' from {repo}...")
-            hf_hub_download(repo_id=repo, filename=onnx_file, local_dir=str(model_root))
+            self._fetch(repo, onnx_file, model_root, model_onnx_path)
 
         if not tokenizer_json_path.exists():
             print(f"Downloading tokenizer for '{self.model_key}' from {repo}...")
-            hf_hub_download(repo_id=repo, filename=tokenizer_file, local_dir=str(model_root))
+            self._fetch(repo, tokenizer_file, model_root, tokenizer_json_path)
 
         return str(model_onnx_path), str(tokenizer_json_path)
+
+    def _fetch(self, repo: str, filename: str, model_root, dest_path):
+        """Downloads one model file, reporting progress when a callback is set.
+
+        With a callback we stream the file ourselves to surface progress to the
+        UI; otherwise we fall back to hf_hub_download (console progress, caching,
+        resume) for the simple/offline path.
+        """
+        if self.progress_callback is not None:
+            _download_with_progress(
+                repo,
+                filename,
+                dest_path,
+                lambda done, total: self.progress_callback(self.model_key, filename, done, total),
+            )
+        else:
+            hf_hub_download(repo_id=repo, filename=filename, local_dir=str(model_root))
 
     def get_embeddings(self, texts: list[str], is_query: bool = False) -> list[list[float]]:
         if not texts:

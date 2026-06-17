@@ -1,4 +1,4 @@
-import type { SearchResult, SearchFilters, ModelInfo } from "./types";
+import type { SearchResult, SearchFilters, ModelInfo, IndexStatus } from "./types";
 
 const API_BASE = "http://127.0.0.1:8765";
 
@@ -22,7 +22,7 @@ export async function searchDocuments(
   return res.json();
 }
 
-export async function getIndexStatus(): Promise<{ status: string }> {
+export async function getIndexStatus(): Promise<IndexStatus> {
   const res = await fetch(`${API_BASE}/api/status`);
   if (!res.ok) throw new Error(`Status fetch failed: ${res.statusText}`);
   return res.json();

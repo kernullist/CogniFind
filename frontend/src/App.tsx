@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { searchDocuments, openFile, getIndexStatus, getModels, setModel } from "./api";
-import type { SearchResult, DateFilter, ExtFilter, SearchFilters, ModelInfo } from "./types";
+import type { SearchResult, DateFilter, ExtFilter, SearchFilters, ModelInfo, DownloadState } from "./types";
 import "./App.css";
 
 // Format a Date as a local-time naive ISO string (no timezone / no "Z").
@@ -124,17 +124,38 @@ export default function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [activeModel, setActiveModel] = useState<string>("");
   const [switchingModel, setSwitchingModel] = useState(false);
+  const [download, setDownload] = useState<DownloadState | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
-    const interval = setInterval(() => {
-      getIndexStatus()
-        .then((s) => setStatus(s.status))
-        .catch(() => setStatus("Backend offline"));
-    }, 3000);
-    return () => clearInterval(interval);
+  }, []);
+
+  // Poll status; speed up while a model download is in progress so the
+  // progress bar updates smoothly.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const s = await getIndexStatus();
+        if (cancelled) return;
+        setStatus(s.status);
+        setDownload(s.model ?? null);
+        timer = setTimeout(poll, s.model?.downloading ? 700 : 3000);
+      } catch {
+        if (cancelled) return;
+        setStatus("Backend offline");
+        setDownload(null);
+        timer = setTimeout(poll, 3000);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -282,6 +303,23 @@ export default function App() {
           </select>
         )}
       </div>
+
+      {download?.downloading && (
+        <div className="download-bar">
+          <div className="download-label">
+            Downloading model{download.model ? ` (${download.model})` : ""}
+            {download.total > 0
+              ? ` — ${download.percent.toFixed(0)}%  ${formatSize(download.downloaded)} / ${formatSize(download.total)}`
+              : ` — ${formatSize(download.downloaded)}`}
+          </div>
+          <div className="download-track">
+            <div
+              className={`download-fill${download.total > 0 ? "" : " indeterminate"}`}
+              style={download.total > 0 ? { width: `${download.percent}%` } : undefined}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="separator" />
 

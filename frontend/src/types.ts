@@ -21,5 +21,21 @@ export interface ModelInfo {
   dim: number;
 }
 
+export interface DownloadState {
+  ready: boolean;
+  downloading: boolean;
+  model: string | null;
+  file: string | null;
+  percent: number;
+  downloaded: number;
+  total: number;
+  error: string | null;
+}
+
+export interface IndexStatus {
+  status: string;
+  model: DownloadState;
+}
+
 export type DateFilter = "all" | "today" | "week" | "month";
 export type ExtFilter = "all" | ".pdf" | ".docx" | ".xlsx" | ".txt" | ".md";
