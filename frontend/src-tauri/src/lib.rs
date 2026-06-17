@@ -10,7 +10,10 @@ use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
 struct AppState {
+    // Sidecar process (production: bundled cognifind-backend.exe).
     backend_child: Mutex<Option<CommandChild>>,
+    // Fallback process (dev: locally launched `python api.py`).
+    backend_local: Mutex<Option<std::process::Child>>,
 }
 
 fn start_backend_sidecar(app: &tauri::AppHandle, state: &AppState) {
@@ -38,7 +41,7 @@ fn start_backend_sidecar(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-fn start_backend_local_python(_state: &AppState) {
+fn start_backend_local_python(state: &AppState) {
     let project_root = std::env::current_exe()
         .unwrap()
         .parent()
@@ -70,6 +73,9 @@ fn start_backend_local_python(_state: &AppState) {
     match child {
         Ok(process) => {
             log::info!("Python backend started via local python (PID: {})", process.id());
+            // Store the child so it is killed on app exit instead of leaking.
+            let mut guard = state.backend_local.lock().unwrap();
+            *guard = Some(process);
         }
         Err(e) => {
             log::error!("Failed to start Python backend: {}", e);
@@ -78,9 +84,12 @@ fn start_backend_local_python(_state: &AppState) {
 }
 
 fn stop_backend_sidecar(state: &AppState) {
-    let mut guard = state.backend_child.lock().unwrap();
-    if let Some(child) = guard.take() {
+    if let Some(child) = state.backend_child.lock().unwrap().take() {
         log::info!("Stopping Python backend sidecar");
+        let _ = child.kill();
+    }
+    if let Some(mut child) = state.backend_local.lock().unwrap().take() {
+        log::info!("Stopping local python backend");
         let _ = child.kill();
     }
 }
@@ -99,6 +108,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState {
             backend_child: Mutex::new(None),
+            backend_local: Mutex::new(None),
         })
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -180,8 +190,16 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![toggle_search_window])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Ensure the Python backend is terminated on every exit path, not
+            // just the tray "Exit" menu, so it is never left orphaned.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<AppState>();
+                stop_backend_sidecar(&state);
+            }
+        });
 }
 
 #[tauri::command]
