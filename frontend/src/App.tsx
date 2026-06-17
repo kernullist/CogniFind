@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { searchDocuments, openFile, getIndexStatus } from "./api";
-import type { SearchResult, DateFilter, ExtFilter, SearchFilters } from "./types";
+import { searchDocuments, openFile, getIndexStatus, getModels, setModel } from "./api";
+import type { SearchResult, DateFilter, ExtFilter, SearchFilters, ModelInfo } from "./types";
 import "./App.css";
 
 // Format a Date as a local-time naive ISO string (no timezone / no "Z").
@@ -121,6 +121,9 @@ export default function App() {
   const [extFilter, setExtFilter] = useState<ExtFilter>("all");
   const [status, setStatus] = useState("Ready");
   const [loading, setLoading] = useState(false);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [activeModel, setActiveModel] = useState<string>("");
+  const [switchingModel, setSwitchingModel] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -133,6 +136,34 @@ export default function App() {
     }, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    getModels()
+      .then((m) => {
+        setModels(m.available);
+        setActiveModel(m.active);
+      })
+      .catch((e) => console.error("Model list error:", e));
+  }, []);
+
+  const handleModelChange = useCallback(
+    async (key: string) => {
+      if (key === activeModel || switchingModel) return;
+      setSwitchingModel(true);
+      setStatus("Switching model, re-indexing...");
+      try {
+        await setModel(key);
+        setActiveModel(key);
+        setResults([]);
+      } catch (e) {
+        console.error("Model switch error:", e);
+        setStatus("Model switch failed");
+      } finally {
+        setSwitchingModel(false);
+      }
+    },
+    [activeModel, switchingModel]
+  );
 
   const doSearch = useCallback(
     async (q: string, df: DateFilter, ef: ExtFilter) => {
@@ -234,6 +265,22 @@ export default function App() {
           <option value=".txt">TXT</option>
           <option value=".md">MD</option>
         </select>
+
+        {models.length > 0 && (
+          <select
+            value={activeModel}
+            onChange={(e) => handleModelChange(e.target.value)}
+            className="filter-select"
+            disabled={switchingModel}
+            title="Embedding model"
+          >
+            {models.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div className="separator" />

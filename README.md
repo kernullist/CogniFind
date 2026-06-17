@@ -215,6 +215,8 @@ The Python backend exposes a REST API on `http://localhost:8765`:
 | `/api/status` | GET | Get indexing status |
 | `/api/settings` | GET | Get monitored directories |
 | `/api/settings` | PUT | Update monitored directories |
+| `/api/model` | GET | Get active and available embedding models |
+| `/api/model` | PUT | Switch embedding model (clears index and re-indexes) |
 | `/api/index/scan` | POST | Trigger manual rescan |
 | `/api/open-file` | POST | Open file with default application |
 

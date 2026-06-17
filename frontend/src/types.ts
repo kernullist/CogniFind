@@ -15,5 +15,11 @@ export interface SearchFilters {
   extensions: string[] | null;
 }
 
+export interface ModelInfo {
+  key: string;
+  label: string;
+  dim: number;
+}
+
 export type DateFilter = "all" | "today" | "week" | "month";
 export type ExtFilter = "all" | ".pdf" | ".docx" | ".xlsx" | ".txt" | ".md";

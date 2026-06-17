@@ -1,4 +1,4 @@
-import type { SearchResult, SearchFilters } from "./types";
+import type { SearchResult, SearchFilters, ModelInfo } from "./types";
 
 const API_BASE = "http://127.0.0.1:8765";
 
@@ -38,4 +38,19 @@ export async function openFile(path: string): Promise<void> {
 
 export async function triggerRescan(): Promise<void> {
   await fetch(`${API_BASE}/api/index/scan`, { method: "POST" });
+}
+
+export async function getModels(): Promise<{ active: string; available: ModelInfo[] }> {
+  const res = await fetch(`${API_BASE}/api/model`);
+  if (!res.ok) throw new Error(`Model fetch failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setModel(modelKey: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/model`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model_key: modelKey }),
+  });
+  if (!res.ok) throw new Error(`Model switch failed: ${res.statusText}`);
 }

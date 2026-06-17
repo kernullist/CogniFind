@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
+from src.config import EMBEDDING_MODELS
 from src.embedding import EmbeddingEngine
 from src.database import (
     init_db,
@@ -17,6 +18,9 @@ from src.database import (
     save_monitored_dirs,
     query_similar_documents,
     is_document_indexed,
+    get_active_model_key,
+    set_active_model_key,
+    clear_index,
 )
 from src.watcher import IndexingWorker, WatcherManager
 
@@ -41,8 +45,9 @@ async def lifespan(app: FastAPI):
 
     init_db()
 
-    print("Pre-heating Embedding Engine...")
-    embedding_engine = EmbeddingEngine()
+    active_model = get_active_model_key()
+    print(f"Pre-heating Embedding Engine (model: {active_model})...")
+    embedding_engine = EmbeddingEngine(active_model)
 
     monitored_dirs = get_monitored_dirs()
     print(f"Monitored directories: {monitored_dirs}")
@@ -99,6 +104,10 @@ class SettingsRequest(BaseModel):
     monitored_dirs: list[str]
 
 
+class ModelRequest(BaseModel):
+    model_key: str
+
+
 # Defined as a plain (non-async) function so FastAPI runs it in its worker
 # threadpool. Embedding is CPU-bound and the DB call is blocking; running them
 # directly on the event loop would stall status polling and other requests.
@@ -107,7 +116,7 @@ def search(req: SearchRequest):
     if not req.query.strip():
         return []
     try:
-        query_vector = embedding_engine.get_embedding(req.query.strip())
+        query_vector = embedding_engine.get_embedding(req.query.strip(), is_query=True)
         results = query_similar_documents(
             query_vector,
             limit=req.limit,
@@ -159,6 +168,63 @@ def update_settings(req: SettingsRequest):
     watcher.start()
 
     return {"monitored_dirs": monitored_dirs}
+
+
+@app.get("/api/model")
+async def get_model():
+    return {
+        "active": get_active_model_key(),
+        "available": [
+            {"key": k, "label": v["label"], "dim": v["dim"]}
+            for k, v in EMBEDDING_MODELS.items()
+        ],
+    }
+
+
+# Non-async: rebuilding the engine may download a model and stopping the worker
+# blocks on QThread.wait(); both must run off the event loop.
+@app.put("/api/model")
+def set_model(req: ModelRequest):
+    global embedding_engine, worker, watcher
+
+    if req.model_key not in EMBEDDING_MODELS:
+        raise HTTPException(status_code=400, detail=f"Unknown model key: {req.model_key}")
+
+    if req.model_key == get_active_model_key():
+        return {"active": req.model_key, "changed": False}
+
+    # Build the new engine first (may download the model). If this fails we have
+    # not yet touched the existing index.
+    try:
+        new_engine = EmbeddingEngine(req.model_key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load model: {e}")
+
+    # Stop indexing before swapping the engine and wiping the index.
+    if watcher:
+        watcher.stop()
+    if worker:
+        worker.stop()
+        worker.wait()
+        try:
+            worker.status_changed.disconnect(on_status_changed)
+        except (RuntimeError, TypeError):
+            pass
+
+    # Persist the choice, wipe the now-incompatible index, recreate the vec table
+    # sized for the new model, and re-index from scratch.
+    set_active_model_key(req.model_key)
+    clear_index(new_engine.dim)
+    embedding_engine = new_engine
+
+    monitored_dirs = get_monitored_dirs()
+    worker = IndexingWorker(embedding_engine, monitored_dirs)
+    worker.status_changed.connect(on_status_changed)
+    watcher = WatcherManager(monitored_dirs, worker)
+    worker.start(QThread.IdlePriority)
+    watcher.start()
+
+    return {"active": req.model_key, "changed": True}
 
 
 @app.post("/api/index/scan")

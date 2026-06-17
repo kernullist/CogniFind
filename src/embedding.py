@@ -4,10 +4,16 @@ import numpy as np
 import onnxruntime as ort
 from tokenizers import Tokenizer
 from huggingface_hub import hf_hub_download
-from src.config import MODEL_DIR, HF_REPO
+from src.config import MODEL_DIR, DEFAULT_MODEL_KEY, get_model_config
 
 class EmbeddingEngine:
-    def __init__(self):
+    def __init__(self, model_key: str = DEFAULT_MODEL_KEY):
+        self.model_key = model_key
+        self.cfg = get_model_config(model_key)
+        self.dim = self.cfg["dim"]
+        self.query_prefix = self.cfg["query_prefix"]
+        self.passage_prefix = self.cfg["passage_prefix"]
+
         self.model_path, self.tokenizer_path = self._ensure_model_files()
 
         # Load the ONNX model session
@@ -31,34 +37,43 @@ class EmbeddingEngine:
         self._lock = threading.Lock()
 
     def _ensure_model_files(self):
-        """Downloads the ONNX model and tokenizer.json if not present locally."""
-        model_onnx_path = MODEL_DIR / "onnx" / "model.onnx"
-        tokenizer_json_path = MODEL_DIR / "tokenizer.json"
-        
-        # Ensure target directories exist
-        (MODEL_DIR / "onnx").mkdir(parents=True, exist_ok=True)
-        
+        """Downloads the ONNX model and tokenizer.json if not present locally.
+
+        Each model is cached under its own subdirectory so different models do
+        not collide on the shared onnx/model.onnx and tokenizer.json names.
+        """
+        model_root = MODEL_DIR / self.model_key
+        onnx_file = self.cfg["onnx_file"]
+        tokenizer_file = self.cfg["tokenizer_file"]
+
+        model_onnx_path = model_root / onnx_file
+        tokenizer_json_path = model_root / tokenizer_file
+
+        # Ensure target directories exist (onnx_file may contain a subdir).
+        model_onnx_path.parent.mkdir(parents=True, exist_ok=True)
+        tokenizer_json_path.parent.mkdir(parents=True, exist_ok=True)
+
+        repo = self.cfg["repo"]
+
         if not model_onnx_path.exists():
-            print("Downloading ONNX model file from Hugging Face Hub...")
-            hf_hub_download(
-                repo_id=HF_REPO,
-                filename="onnx/model.onnx",
-                local_dir=str(MODEL_DIR)
-            )
-            
+            print(f"Downloading ONNX model '{self.model_key}' from {repo}...")
+            hf_hub_download(repo_id=repo, filename=onnx_file, local_dir=str(model_root))
+
         if not tokenizer_json_path.exists():
-            print("Downloading tokenizer.json file from Hugging Face Hub...")
-            hf_hub_download(
-                repo_id=HF_REPO,
-                filename="tokenizer.json",
-                local_dir=str(MODEL_DIR)
-            )
-            
+            print(f"Downloading tokenizer for '{self.model_key}' from {repo}...")
+            hf_hub_download(repo_id=repo, filename=tokenizer_file, local_dir=str(model_root))
+
         return str(model_onnx_path), str(tokenizer_json_path)
 
-    def get_embeddings(self, texts: list[str]) -> list[list[float]]:
+    def get_embeddings(self, texts: list[str], is_query: bool = False) -> list[list[float]]:
         if not texts:
             return []
+
+        # Apply the model's asymmetric prefix (query vs passage). No-op for
+        # symmetric models where both prefixes are empty.
+        prefix = self.query_prefix if is_query else self.passage_prefix
+        if prefix:
+            texts = [prefix + t for t in texts]
 
         # Serialize tokenization + inference across threads.
         with self._lock:
@@ -97,5 +112,5 @@ class EmbeddingEngine:
 
         return normalized_embeddings.tolist()
 
-    def get_embedding(self, text: str) -> list[float]:
-        return self.get_embeddings([text])[0]
+    def get_embedding(self, text: str, is_query: bool = False) -> list[float]:
+        return self.get_embeddings([text], is_query=is_query)[0]

@@ -13,9 +13,14 @@ from src.config import SUPPORTED_EXTENSIONS, DEBOUNCE_DELAY_SEC, MAX_FILE_SIZE_B
 from src.database import (
     get_db_connection,
     init_db,
-    insert_document,
+    get_file_hash_id,
+    hash_text,
+    upsert_document,
+    update_document_metadata,
+    get_document_index_state,
     insert_chunk,
     insert_embedding,
+    delete_chunks,
     delete_document_by_path,
     get_all_indexed_files
 )
@@ -204,28 +209,42 @@ class IndexingWorker(QThread):
             return
             
         last_modified = stat.st_mtime
+        doc_id = get_file_hash_id(filepath_str)
 
-        # 1. Extract text and prepare chunks
+        # 1. Extract text, chunk it, and hash each chunk plus the whole document.
         text = extract_text(filepath_str)
         chunks = chunk_text(text) if text.strip() else []
+        chunk_hashes = [hash_text(c) for c in chunks]
+        # Document content hash derived from the ordered chunk hashes.
+        content_hash = hash_text("\x1f".join(chunk_hashes))
 
-        # 2. Generate embeddings up front, OUTSIDE of any DB transaction.
-        #    Embedding is slow and throttled (up to 250ms/chunk while the user
-        #    is active). Doing it inside the write transaction would hold the
-        #    SQLite write lock for the entire duration, starving concurrent
-        #    writers (watcher deletes) until busy_timeout expires and blocking
-        #    WAL checkpoints. Compute first, then write in one quick transaction.
-        embeddings = []
+        # 2. Incremental: if the content is unchanged, only refresh metadata.
+        #    This skips all embedding for the common "modified event but content
+        #    did not actually change" case (editor rewrites, touch, etc.).
+        existing = get_document_index_state(filepath_str)
+        if existing is not None and existing[0] == content_hash:
+            update_document_metadata(filepath_str, file_size, last_modified)
+            return
+
+        existing_chunks = existing[1] if existing is not None else {}
+
+        # 3. Determine which chunk positions are new or changed (need embedding).
+        to_embed = []
+        for idx, h in enumerate(chunk_hashes):
+            old = existing_chunks.get(idx)
+            if old is None or old[1] != h:
+                to_embed.append(idx)
+
+        # 4. Embed only the changed chunks, OUTSIDE any DB transaction. Embedding
+        #    is slow and throttled; holding the write lock across it would starve
+        #    concurrent writers and block WAL checkpoints.
+        new_embeddings = {}
         try:
-            for chunk in chunks:
-                # Throttle CPU: Check if user is active
+            for idx in to_embed:
                 self.throttle_cpu()
-
-                # If worker was stopped mid-process, abort before touching the DB
                 if not self.is_running:
                     raise InterruptedError("Indexing worker was stopped by user.")
-
-                embeddings.append(self.embedding_engine.get_embedding(chunk))
+                new_embeddings[idx] = self.embedding_engine.get_embedding(chunks[idx])
         except InterruptedError:
             print(f"Indexing interrupted for {filepath_str}. Nothing written.")
             return
@@ -233,16 +252,25 @@ class IndexingWorker(QThread):
             print(f"Error embedding {filepath_str}: {e}")
             return
 
-        # 3. Persist document, chunks and embeddings in a single atomic transaction.
+        # 5. Apply the diff in a single atomic transaction. Unchanged chunks are
+        #    left untouched (their embeddings are reused).
         conn = get_db_connection()
         try:
             with conn:
-                # Insert document and get ID (deletes old chunks if existing)
-                doc_id = insert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified)
+                upsert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified, content_hash)
 
-                for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                    chunk_id = insert_chunk(conn, doc_id, idx, chunk)
-                    insert_embedding(conn, chunk_id, embedding)
+                # Remove chunks that were dropped (index beyond new length) or
+                # changed (they will be re-inserted below).
+                remove_ids = [
+                    cid for idx, (cid, _h) in existing_chunks.items()
+                    if idx >= len(chunks) or idx in new_embeddings
+                ]
+                delete_chunks(conn, remove_ids)
+
+                # Insert the new/changed chunks and their embeddings.
+                for idx in to_embed:
+                    chunk_id = insert_chunk(conn, doc_id, idx, chunks[idx], chunk_hashes[idx])
+                    insert_embedding(conn, chunk_id, new_embeddings[idx])
         except Exception as e:
             print(f"Error indexing {filepath_str}: {e}")
         finally:

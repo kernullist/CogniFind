@@ -12,9 +12,36 @@ DB_PATH = APP_DATA_DIR / "contextfinder.db"
 MODEL_DIR = APP_DATA_DIR / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# Embedding settings
-HF_REPO = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384
+# Embedding model registry.
+# Each model is downloaded as an ONNX file + tokenizer.json from the Hugging
+# Face Hub. e5-style models require asymmetric prefixes ("query:" / "passage:")
+# for best retrieval quality; symmetric models leave both empty.
+EMBEDDING_MODELS = {
+    "minilm": {
+        "label": "all-MiniLM-L6-v2 (English, fast)",
+        "repo": "sentence-transformers/all-MiniLM-L6-v2",
+        "onnx_file": "onnx/model.onnx",
+        "tokenizer_file": "tokenizer.json",
+        "dim": 384,
+        "query_prefix": "",
+        "passage_prefix": "",
+    },
+    "e5-multilingual": {
+        "label": "multilingual-e5-small (Korean / multilingual)",
+        "repo": "Xenova/multilingual-e5-small",
+        "onnx_file": "onnx/model.onnx",
+        "tokenizer_file": "tokenizer.json",
+        "dim": 384,
+        "query_prefix": "query: ",
+        "passage_prefix": "passage: ",
+    },
+}
+
+DEFAULT_MODEL_KEY = "minilm"
+
+def get_model_config(key: str) -> dict:
+    """Returns the registry entry for a model key, falling back to the default."""
+    return EMBEDDING_MODELS.get(key, EMBEDDING_MODELS[DEFAULT_MODEL_KEY])
 
 # Chunking settings
 CHUNK_SIZE = 500
