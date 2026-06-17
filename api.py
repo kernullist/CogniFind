@@ -68,9 +68,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ContextFinder API", lifespan=lifespan)
 
+# Restrict CORS to the Tauri webview origins instead of "*":
+#   - http://localhost:5173      : Vite dev server (devUrl)
+#   - http://tauri.localhost     : Windows production webview
+#   - tauri://localhost          : other platforms' webview
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -133,6 +142,12 @@ def update_settings(req: SettingsRequest):
     if worker:
         worker.stop()
         worker.wait()
+        # Disconnect the old worker's signal before dropping it so the slot is
+        # not left bound to a discarded object.
+        try:
+            worker.status_changed.disconnect(on_status_changed)
+        except (RuntimeError, TypeError):
+            pass
 
     monitored_dirs = req.monitored_dirs
     worker = IndexingWorker(embedding_engine, monitored_dirs)
