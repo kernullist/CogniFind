@@ -1,0 +1,38 @@
+# Normalize line endings: store text as LF in the repository, auto-detect text vs binary.
+* text=auto eol=lf
+
+# Windows-only scripts: keep CRLF in the working tree.
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Source and config files are text (LF).
+*.py    text
+*.ts    text
+*.tsx   text
+*.js    text
+*.jsx   text
+*.json  text
+*.css   text
+*.html  text
+*.rs    text
+*.toml  text
+*.lock  text
+*.md    text
+*.svg   text
+*.sh    text eol=lf
+
+# Binary files: never normalize or diff as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.icns  binary
+*.pdf   binary
+*.exe   binary
+*.dll   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
