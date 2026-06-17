@@ -42,5 +42,3 @@ frontend/src-tauri/binaries/*.exe
 
 # Bundled embedding models (fetched at build time by scripts/fetch_models.py)
 /models/
-frontend/src-tauri/resources/models/*
-!frontend/src-tauri/resources/models/README.txt

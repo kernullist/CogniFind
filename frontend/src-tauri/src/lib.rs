@@ -19,22 +19,10 @@ struct AppState {
 
 fn start_backend_sidecar(app: &tauri::AppHandle, state: &AppState) {
     let shell = app.shell();
-
-    // Point the backend at the bundled (offline) models installed as Tauri
-    // resources: <resource_dir>/models.
-    let models_dir = app
-        .path()
-        .resource_dir()
-        .ok()
-        .map(|d| d.join("models"));
-
     let child_result = shell.sidecar("cognifind-backend");
 
     match child_result {
-        Ok(mut cmd) => {
-            if let Some(dir) = &models_dir {
-                cmd = cmd.env("COGNIFIND_MODELS_DIR", dir.to_string_lossy().to_string());
-            }
+        Ok(cmd) => {
             match cmd.spawn() {
                 Ok((_rx, child)) => {
                     log::info!("Python backend sidecar started");
@@ -79,7 +67,6 @@ fn start_backend_local_python(state: &AppState) {
     let child = std::process::Command::new("python")
         .arg(api_script.to_str().unwrap())
         .current_dir(&project_root)
-        .env("COGNIFIND_MODELS_DIR", project_root.join("models"))
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn();

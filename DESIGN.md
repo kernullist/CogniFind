@@ -319,7 +319,7 @@ C:\Program Files\CogniFind\
 
 - **WebView2 Runtime**: Windows 10/11에 기본 탑재 (없으면 자동 설치)
 - **Python**: 불필요 (PyInstaller로 번들링됨)
-- **ONNX 모델**: 오프라인 배포 시 설치 패키지에 동봉되어 런타임 네트워크 불필요. Tauri 리소스(`resources/models`)로 설치되고, 셸이 `COGNIFIND_MODELS_DIR` 환경변수로 백엔드에 경로를 전달. 빌드 시 `scripts/fetch_models.py`가 모델을 받아 번들. (프로덕션 앱은 기본적으로 다운로드 비활성 `ALLOW_MODEL_DOWNLOAD=False`)
+- **ONNX 모델**: 포터블 배포에서 실행 파일 옆 `models/` 폴더에 위치하여 런타임 네트워크 불필요. 백엔드(frozen)는 `Path(sys.executable).parent / "models"`를 참조(또는 `COGNIFIND_MODELS_DIR` 환경변수 우선). 빌드 시 `scripts/fetch_models.py`가 모델을 받아 포터블 폴더에 배치. (프로덕션 앱은 기본적으로 다운로드 비활성 `ALLOW_MODEL_DOWNLOAD=False`) 업데이트 시 두 exe만 교체하면 `models/`는 그대로 유지.
 
 ---
 

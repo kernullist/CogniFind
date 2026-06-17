@@ -13,16 +13,17 @@ DB_PATH = APP_DATA_DIR / "contextfinder.db"
 MODEL_DIR = APP_DATA_DIR / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# Bundled model location for offline deployment. In production the Tauri shell
-# passes COGNIFIND_MODELS_DIR pointing at the installed resources/models dir; in
-# a PyInstaller onefile build we fall back to the extracted _MEIPASS/models; in
-# dev we use the project-root ./models populated by scripts/fetch_models.py.
+# Bundled model location for offline deployment. The portable distribution keeps
+# models in a "models" folder next to the executable so they persist across
+# exe-only updates. Resolution: explicit COGNIFIND_MODELS_DIR, else (frozen) the
+# folder next to the executable, else (dev) the project-root ./models populated
+# by scripts/fetch_models.py.
 FROZEN = getattr(sys, "frozen", False)
 _env_models = os.environ.get("COGNIFIND_MODELS_DIR")
 if _env_models:
     BUNDLED_MODELS_DIR = Path(_env_models)
 elif FROZEN:
-    BUNDLED_MODELS_DIR = Path(getattr(sys, "_MEIPASS", ".")) / "models"
+    BUNDLED_MODELS_DIR = Path(sys.executable).resolve().parent / "models"
 else:
     BUNDLED_MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 

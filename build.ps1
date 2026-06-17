@@ -77,23 +77,8 @@ try {
 }
 Write-Host "  Frontend dependencies OK." -ForegroundColor Green
 
-# Step 5: Fetch embedding models for offline bundling
-Write-Host "[5/6] Fetching embedding models (offline bundle)..." -ForegroundColor Yellow
-$MODELS_DIR = Join-Path $TAURI_DIR "resources\models"
-Push-Location $ROOT
-try {
-    python scripts\fetch_models.py "$MODELS_DIR"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: Model fetch failed!" -ForegroundColor Red
-        exit 1
-    }
-} finally {
-    Pop-Location
-}
-Write-Host "  Models ready: $MODELS_DIR" -ForegroundColor Green
-
-# Step 6: Build Tauri application
-Write-Host "[6/6] Building Tauri application..." -ForegroundColor Yellow
+# Step 5: Build Tauri application
+Write-Host "[5/6] Building Tauri application..." -ForegroundColor Yellow
 Push-Location (Join-Path $ROOT "frontend")
 try {
     npx tauri build
@@ -104,6 +89,44 @@ try {
 } finally {
     Pop-Location
 }
+
+# Step 6: Assemble the portable package (exe + sidecar + models next to each
+# other). Updates ship just the two exes; the models/ folder persists.
+Write-Host "[6/6] Assembling portable package..." -ForegroundColor Yellow
+$TAURI_EXE = Join-Path $TAURI_DIR "target\release\CogniFind.exe"
+if (-not (Test-Path $TAURI_EXE)) {
+    Write-Host "ERROR: Tauri exe not found at $TAURI_EXE" -ForegroundColor Red
+    exit 1
+}
+
+$PORTABLE_DIR = Join-Path $ROOT "dist\CogniFind-portable"
+if (Test-Path $PORTABLE_DIR) {
+    Remove-Item $PORTABLE_DIR -Recurse -Force
+}
+New-Item -ItemType Directory -Path $PORTABLE_DIR -Force | Out-Null
+
+Copy-Item $TAURI_EXE (Join-Path $PORTABLE_DIR "CogniFind.exe") -Force
+Copy-Item $PYEXE (Join-Path $PORTABLE_DIR "cognifind-backend.exe") -Force
+
+# Models live next to the exe so exe-only updates leave them untouched.
+Push-Location $ROOT
+try {
+    python scripts\fetch_models.py (Join-Path $PORTABLE_DIR "models")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Model fetch failed!" -ForegroundColor Red
+        exit 1
+    }
+} finally {
+    Pop-Location
+}
+
+$ZIP = Join-Path $ROOT "dist\CogniFind-portable.zip"
+if (Test-Path $ZIP) {
+    Remove-Item $ZIP -Force
+}
+Compress-Archive -Path (Join-Path $PORTABLE_DIR "*") -DestinationPath $ZIP
+Write-Host "  Portable package: $PORTABLE_DIR" -ForegroundColor Green
+Write-Host "  Portable zip:     $ZIP" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
@@ -129,5 +152,9 @@ if (Test-Path $TAURI_EXE) {
     Write-Host "  $TAURI_EXE ($sizeMB MB)" -ForegroundColor White
 }
 
+Write-Host ""
+Write-Host "Distribution: ship dist\CogniFind-portable (or the .zip)." -ForegroundColor Cyan
+Write-Host "To UPDATE an existing install, replace only CogniFind.exe and" -ForegroundColor Cyan
+Write-Host "cognifind-backend.exe; the models\ folder persists." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Done." -ForegroundColor Green
