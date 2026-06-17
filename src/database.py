@@ -148,17 +148,37 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
     """Performs KNN vector similarity search joined with document metadata."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     serialized_query = sqlite_vec.serialize_float32(query_vector)
-    
+
+    # Total number of candidate vectors. Used to size the KNN fetch.
+    total = cursor.execute("SELECT COUNT(*) FROM chunk_embeddings").fetchone()[0]
+    if total == 0:
+        conn.close()
+        return []
+
+    has_filters = bool(file_extensions or date_from or date_to)
+
+    # The metadata filters (extension/date) are applied AFTER the vec0 KNN
+    # returns its top-k rows, so a small k can be entirely filtered out and
+    # yield far fewer than `limit` results even when matching documents exist.
+    # sqlite-vec KNN is brute-force (it scores every vector regardless of k),
+    # so when filters are present we set k to the full candidate count to keep
+    # results correct; the only extra cost is sorting/returning more rows.
+    # Without filters we keep the cheap limit*3 over-fetch for de-duplication.
+    if has_filters:
+        k = total
+    else:
+        k = min(limit * 3, total)
+
     sql = """
-        SELECT 
-            d.file_path, 
-            d.file_name, 
-            d.file_extension, 
-            d.file_size, 
-            d.last_modified, 
-            c.text_content, 
+        SELECT
+            d.file_path,
+            d.file_name,
+            d.file_extension,
+            d.file_size,
+            d.last_modified,
+            c.text_content,
             c.chunk_index,
             (1.0 - ce.distance) AS similarity
         FROM chunk_embeddings ce
@@ -166,33 +186,33 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
         JOIN documents d ON c.document_id = d.id
         WHERE ce.embedding MATCH ? AND k = ?
     """
-    
-    params = [serialized_query, limit * 3]
-    
+
+    params = [serialized_query, k]
+
     if file_extensions:
         exts_placeholders = ",".join("?" for _ in file_extensions)
         sql += f" AND d.file_extension IN ({exts_placeholders})"
         params.extend([ext.lower() for ext in file_extensions])
-    
+
     if date_from:
         sql += " AND d.last_modified >= ?"
         params.append(date_from)
-    
+
     if date_to:
         sql += " AND d.last_modified <= ?"
         params.append(date_to)
-        
+
     sql += " ORDER BY ce.distance ASC"
-    
+
     cursor.execute(sql, params)
-    
+
     results = []
     seen_files = {}
-    
+
     for row in cursor.fetchall():
         path = row['file_path']
         sim = row['similarity']
-        
+
         if path not in seen_files:
             seen_files[path] = sim
             results.append({
@@ -207,7 +227,7 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
             })
             if len(results) >= limit:
                 break
-                
+
     conn.close()
     return results
 

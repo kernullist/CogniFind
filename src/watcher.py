@@ -204,35 +204,45 @@ class IndexingWorker(QThread):
             return
             
         last_modified = stat.st_mtime
-        
+
         # 1. Extract text and prepare chunks
         text = extract_text(filepath_str)
         chunks = chunk_text(text) if text.strip() else []
-        
-        # 2. Generate embeddings & Insert (within a single atomic transaction)
+
+        # 2. Generate embeddings up front, OUTSIDE of any DB transaction.
+        #    Embedding is slow and throttled (up to 250ms/chunk while the user
+        #    is active). Doing it inside the write transaction would hold the
+        #    SQLite write lock for the entire duration, starving concurrent
+        #    writers (watcher deletes) until busy_timeout expires and blocking
+        #    WAL checkpoints. Compute first, then write in one quick transaction.
+        embeddings = []
+        try:
+            for chunk in chunks:
+                # Throttle CPU: Check if user is active
+                self.throttle_cpu()
+
+                # If worker was stopped mid-process, abort before touching the DB
+                if not self.is_running:
+                    raise InterruptedError("Indexing worker was stopped by user.")
+
+                embeddings.append(self.embedding_engine.get_embedding(chunk))
+        except InterruptedError:
+            print(f"Indexing interrupted for {filepath_str}. Nothing written.")
+            return
+        except Exception as e:
+            print(f"Error embedding {filepath_str}: {e}")
+            return
+
+        # 3. Persist document, chunks and embeddings in a single atomic transaction.
         conn = get_db_connection()
         try:
             with conn:
                 # Insert document and get ID (deletes old chunks if existing)
                 doc_id = insert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified)
-                
-                # Process and insert chunks & embeddings
-                for idx, chunk in enumerate(chunks):
-                    # Throttle CPU: Check if user is active
-                    self.throttle_cpu()
-                    
-                    # If worker was stopped mid-process, raise exception to trigger transaction rollback
-                    if not self.is_running:
-                        raise InterruptedError("Indexing worker was stopped by user.")
-                        
-                    # Generate embedding
-                    embedding = self.embedding_engine.get_embedding(chunk)
-                    
-                    # Insert chunk and embedding
+
+                for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                     chunk_id = insert_chunk(conn, doc_id, idx, chunk)
                     insert_embedding(conn, chunk_id, embedding)
-        except InterruptedError:
-            print(f"Indexing interrupted for {filepath_str}. Database transaction rolled back.")
         except Exception as e:
             print(f"Error indexing {filepath_str}: {e}")
         finally:
