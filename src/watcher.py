@@ -9,7 +9,13 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from PySide6.QtCore import QThread, Signal
 
-from src.config import SUPPORTED_EXTENSIONS, DEBOUNCE_DELAY_SEC, MAX_FILE_SIZE_BYTES
+from src.config import (
+    SUPPORTED_EXTENSIONS,
+    DEBOUNCE_DELAY_SEC,
+    MAX_FILE_SIZE_BYTES,
+    IGNORED_DIR_NAMES,
+    is_ignored_path,
+)
 from src.database import (
     get_db_connection,
     init_db,
@@ -72,7 +78,10 @@ class IndexingWorker(QThread):
         for directory in self.monitored_dirs:
             if not directory.exists():
                 continue
-            for root, _, files in os.walk(directory):
+            for root, dirs, files in os.walk(directory):
+                # Prune ignored subdirectories in-place so os.walk does not descend
+                # into them (build output, node_modules, .git, etc.).
+                dirs[:] = [d for d in dirs if d.lower() not in IGNORED_DIR_NAMES]
                 for file in files:
                     ext = os.path.splitext(file)[1].lower()
                     if ext in SUPPORTED_EXTENSIONS:
@@ -86,12 +95,14 @@ class IndexingWorker(QThread):
         for filepath_str in list(self.db_files.keys()):
             if not self.is_running:
                 break
-            if not os.path.exists(filepath_str):
+            # Remove files that no longer exist, or that now fall under an ignored
+            # directory (e.g. after enabling/expanding the ignore rules).
+            if not os.path.exists(filepath_str) or is_ignored_path(filepath_str):
                 delete_document_by_path(filepath_str)
                 deleted_count += 1
-                
+
         if deleted_count > 0:
-            print(f"Purged {deleted_count} missing files from DB index.")
+            print(f"Purged {deleted_count} missing/ignored files from DB index.")
             self.db_files = get_all_indexed_files()
 
     def run(self):
@@ -297,6 +308,9 @@ class IndexingWorker(QThread):
     def queue_file_for_indexing(self, filepath_str: str):
         """Queues file for debounced indexing."""
         filepath_str = filepath_str.replace("\\", "/")
+        # Skip files under ignored directories (build output, deps, VCS, etc.).
+        if is_ignored_path(filepath_str):
+            return
         with self.lock:
             self.debounce_queue[filepath_str] = time.time()
 

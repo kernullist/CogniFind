@@ -77,16 +77,36 @@ DEBOUNCE_DELAY_SEC = 1.0
 # Supported file extensions
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".xlsx"}
 
+# Directory names skipped during indexing: build artifacts, VCS, dependencies,
+# and caches. Matched case-insensitively against each path component. This keeps
+# generated junk (e.g. node_modules, build output) out of the index, which
+# matters once broader folders are watched.
+IGNORED_DIR_NAMES = frozenset({
+    ".git", ".svn", ".hg",
+    "node_modules", "bower_components", "vendor",
+    ".venv", "venv", "__pycache__",
+    ".gradle", ".idea", ".vs", ".vscode", ".cache", ".next", ".nuxt",
+    "build", "dist", "out", "target", "bin", "obj", "intermediates",
+    "$recycle.bin", "system volume information",
+})
+
+def is_ignored_path(path_str: str) -> bool:
+    """Returns True if any component of the path is an ignored directory name."""
+    parts = path_str.replace("\\", "/").lower().split("/")
+    return any(part in IGNORED_DIR_NAMES for part in parts)
+
 # Maximum file size to index (10 MB)
 MAX_FILE_SIZE_MB = 10
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 def get_default_watch_dirs():
-    """Returns a list of default watch directories, focusing on Documents."""
-    docs = Path(os.path.expanduser("~")) / "Documents"
+    """Returns the default watch directories: the user's common document folders."""
+    home = Path(os.path.expanduser("~"))
     dirs = []
-    if docs.exists():
-        dirs.append(str(docs).replace("\\", "/"))
+    for sub in ("Documents", "Desktop", "Downloads", "OneDrive"):
+        p = home / sub
+        if p.exists():
+            dirs.append(str(p).replace("\\", "/"))
     # test_watch is a dev-only convenience. In the frozen app __file__ lives in a
     # temporary PyInstaller extraction dir, so creating/watching it is pointless.
     if not FROZEN:
