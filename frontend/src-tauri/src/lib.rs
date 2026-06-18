@@ -162,7 +162,7 @@ pub fn run() {
             let tray_icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
             let _tray = TrayIconBuilder::with_id("tray")
                 .icon(tray_icon)
-                .tooltip("ContextFinder - Local Semantic Search")
+                .tooltip("CogniFind - Local Semantic Search")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => {

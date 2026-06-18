@@ -466,7 +466,7 @@ class SystemTrayApp:
         
         # System Tray Icon setup
         self.tray_icon = QSystemTrayIcon(create_app_icon(), self.app)
-        self.tray_icon.setToolTip("ContextFinder - Local Semantic Search")
+        self.tray_icon.setToolTip("CogniFind - Local Semantic Search")
         
         # Connect signals
         self.worker.status_changed.connect(self.search_window.update_watcher_status)

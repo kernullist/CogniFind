@@ -1,6 +1,6 @@
-# ContextFinder
+# CogniFind
 
-ContextFinder is a 100% offline, on-device local semantic document search utility for Windows. It runs in the system tray, monitors designated directories in real-time, and allows you to instantly search through file contents using natural language queries via a Spotlight-style popup window.
+CogniFind is a 100% offline, on-device local semantic document search utility for Windows. It runs in the system tray, monitors designated directories in real-time, and allows you to instantly search through file contents using natural language queries via a Spotlight-style popup window.
 
 ---
 
@@ -75,7 +75,7 @@ npm install
 
 ## Architecture
 
-ContextFinder uses a **dual-process architecture**:
+CogniFind uses a **dual-process architecture**:
 
 ```
 ┌─────────────────────────────────┐
@@ -135,7 +135,7 @@ CogniFind/
 ### Production
 
 1. **Install the application** using the provided installer.
-2. **Launch ContextFinder** from the Start Menu or desktop shortcut.
+2. **Launch CogniFind** from the Start Menu or desktop shortcut.
 3. A magnifying glass icon will appear in your Windows system tray, and the background thread will begin scanning your watched directories.
 
 ### Development
@@ -229,7 +229,7 @@ python scripts/inspect_index.py     # flags documents with 0 chunks
 
 ### Monitored Directories
 
-By default, ContextFinder monitors:
+By default, CogniFind monitors:
 
 - `C:\Users\<username>\Documents`
 - `C:\git\CogniFind\test_watch` (development only)

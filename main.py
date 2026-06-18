@@ -36,7 +36,7 @@ def main():
     tray_app = SystemTrayApp(app, search_window, worker, watcher)
     tray_app.start()
     
-    print("ContextFinder is running in the background. Press Win + Alt + F to search.")
+    print("CogniFind is running in the background. Press Win + Alt + F to search.")
     
     # Execute the Qt Event loop
     sys.exit(app.exec())

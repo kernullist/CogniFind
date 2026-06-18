@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "ContextFinder",
+        "title": "CogniFind",
         "width": 700,
         "height": 520,
         "resizable": false,

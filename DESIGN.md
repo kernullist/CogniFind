@@ -1,6 +1,6 @@
-# 시스템 설계 문서: Windows용 로컬 의미론적 파일 검색기 (ContextFinder)
+# 시스템 설계 문서: Windows용 로컬 의미론적 파일 검색기 (CogniFind)
 
-본 문서는 사용자의 파일명 기억 한계를 보완하기 위해 100% 오프라인 온디바이스(On-Device) AI 기술을 활용하여 파일의 세부 내용까지 맥락 검색(Semantic Search)할 수 있는 Windows 데스크톱 유틸리티 **ContextFinder**의 시스템 아키텍처 및 설계 명세서입니다.
+본 문서는 사용자의 파일명 기억 한계를 보완하기 위해 100% 오프라인 온디바이스(On-Device) AI 기술을 활용하여 파일의 세부 내용까지 맥락 검색(Semantic Search)할 수 있는 Windows 데스크톱 유틸리티 **CogniFind**의 시스템 아키텍처 및 설계 명세서입니다.
 
 ---
 
@@ -16,7 +16,7 @@
 
 ## 2. 시스템 아키텍처 (System Architecture)
 
-ContextFinder는 **듀얼 프로세스 아키텍처**를 채택하여 프론트엔드와 백엔드를 명확히 분리합니다:
+CogniFind는 **듀얼 프로세스 아키텍처**를 채택하여 프론트엔드와 백엔드를 명확히 분리합니다:
 
 ```mermaid
 graph TD
@@ -273,7 +273,7 @@ CREATE INDEX idx_documents_file_path ON documents(file_path);
 
 ## 7. Windows 시스템 트레이 및 단축키 연동 상세 (System Integration)
 
-- **백그라운드 상주**: 앱을 실행하면 바탕화면에 작업 창이 나타나지 않고, Windows 우측 하단 알림 영역(System Tray)에 ContextFinder 돋보기 아이콘이 활성화됩니다.
+- **백그라운드 상주**: 앱을 실행하면 바탕화면에 작업 창이 나타나지 않고, Windows 우측 하단 알림 영역(System Tray)에 CogniFind 돋보기 아이콘이 활성화됩니다.
 - **글로벌 핫키 등록**: Tauri의 `tauri-plugin-global-shortcut`을 사용하여 `Alt + Super + F`를 등록합니다. 사용자가 어느 화면에 있든 해당 단축키를 누르면 화면 정중앙에 투명 효과가 적용된 검색 팝업을 즉시 오픈합니다.
 - **파일 더블클릭 액션**: 검색 결과 리스트에서 파일을 더블클릭하면 `/api/open-file` 엔드포인트를 통해 Windows OS 내부 `os.startfile(filepath)` API를 호출하여 사용자가 평소 사용하던 기본 문서 편집기(Acrobat Reader, MS Word, Notepad++ 등)로 즉각 파일을 실행해 줍니다.
 - **트레이 컨텍스트 메뉴**:
