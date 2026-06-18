@@ -1,5 +1,23 @@
 import sys
 import os
+
+# In the frozen, windowed (no-console) build, sys.stdout/stderr are None, so any
+# print() or library output would crash. Redirect both to a log file before
+# importing anything that might write. Done here (module top) because the frozen
+# exe runs this file as its entry point.
+if getattr(sys, "frozen", False):
+    try:
+        _log_dir = os.path.join(os.path.expanduser("~"), ".cognifind")
+        os.makedirs(_log_dir, exist_ok=True)
+        _log_file = open(
+            os.path.join(_log_dir, "cognifind.log"),
+            "a", buffering=1, encoding="utf-8", errors="replace",
+        )
+        sys.stdout = _log_file
+        sys.stderr = _log_file
+    except Exception:
+        pass
+
 import asyncio
 from contextlib import asynccontextmanager
 from threading import Thread, Lock
