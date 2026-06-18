@@ -3,6 +3,7 @@ from pathlib import Path
 import pypdf
 import docx
 import openpyxl
+from src.config import MAX_CHUNKS_PER_DOC
 
 def clean_whitespace(text: str) -> str:
     """Replaces multiple whitespaces and newlines with single instances to clean text."""
@@ -178,6 +179,11 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]
         end = start + chunk_size
         chunk = text[start:end]
         chunks.append(chunk)
+
+        # Cap chunks per document so one huge file cannot stall the indexer.
+        if len(chunks) >= MAX_CHUNKS_PER_DOC:
+            print(f"Chunk cap reached ({MAX_CHUNKS_PER_DOC}); truncating remainder of document.")
+            break
 
         if end >= text_len:
             break

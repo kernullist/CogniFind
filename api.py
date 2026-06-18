@@ -65,11 +65,6 @@ model_state = {
 }
 
 
-def on_status_changed(status):
-    global worker_status
-    worker_status = status
-
-
 def on_download_progress(model_key, filename, downloaded, total):
     """Called from EmbeddingEngine during a model download."""
     with model_lock:
@@ -93,7 +88,6 @@ def _start_indexing(engine, monitored_dirs):
     """Creates and starts the worker + watcher for the given engine/dirs."""
     global worker, watcher
     worker = IndexingWorker(engine, monitored_dirs)
-    worker.status_changed.connect(on_status_changed)
     watcher = WatcherManager(monitored_dirs, worker)
     worker.start(QThread.IdlePriority)
     watcher.start()
@@ -225,10 +219,12 @@ def get_status():
         documents = 0
     if worker is not None:
         progress = worker.get_index_progress()
+        status = worker.current_status
     else:
         progress = {"queued": 0, "scanning": False}
+        status = worker_status
     return {
-        "status": worker_status,
+        "status": status,
         "model": model_info,
         "index": {
             "documents": documents,
@@ -260,12 +256,6 @@ def update_settings(req: SettingsRequest):
     if worker:
         worker.stop()
         worker.wait()
-        # Disconnect the old worker's signal before dropping it so the slot is
-        # not left bound to a discarded object.
-        try:
-            worker.status_changed.disconnect(on_status_changed)
-        except (RuntimeError, TypeError):
-            pass
 
     monitored_dirs = req.monitored_dirs
     _start_indexing(embedding_engine, monitored_dirs)

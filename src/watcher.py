@@ -7,7 +7,7 @@ from threading import Lock
 from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread
 
 from src.config import (
     SUPPORTED_EXTENSIONS,
@@ -50,16 +50,17 @@ def get_idle_duration() -> float:
     return 0.0
 
 class IndexingWorker(QThread):
-    status_changed = Signal(str)
-    progress_changed = Signal(int, int) # (current, total)
-    indexing_finished = Signal()
-
     def __init__(self, embedding_engine, monitored_dirs):
         super().__init__()
         self.embedding_engine = embedding_engine
         self.monitored_dirs = [Path(d) for d in monitored_dirs]
         self.is_running = True
         self.lock = Lock()
+
+        # Current human-readable status, read directly by the API. (Qt signals
+        # are not used: there is no Qt event loop in the host process, so a
+        # cross-thread signal would never be delivered.)
+        self.current_status = "starting"
         
         # Files that need indexing
         self.queue = []
@@ -89,7 +90,7 @@ class IndexingWorker(QThread):
 
     def purge_deleted_files(self):
         """Quickly checks if indexed files exist on disk, deletes them if they do not."""
-        self.status_changed.emit("cleaning database index...")
+        self.current_status = "cleaning database index..."
         self.db_files = get_all_indexed_files()
         deleted_count = 0
         for filepath_str in list(self.db_files.keys()):
@@ -114,7 +115,7 @@ class IndexingWorker(QThread):
         self.walker = self.disk_file_generator()
         self.scanning_complete = False
         
-        self.status_changed.emit("ready to scan")
+        self.current_status = "ready to scan"
         
         # Main event processing loop
         while self.is_running:
@@ -135,7 +136,7 @@ class IndexingWorker(QThread):
             
             # 2. If queue is empty and we are still scanning, advance directory walk
             if not self.queue and not self.scanning_complete:
-                self.status_changed.emit("scanning directories...")
+                self.current_status = "scanning directories..."
                 self.scan_next_batch(batch_size=50)
             
             # 3. Process the queue
@@ -144,7 +145,7 @@ class IndexingWorker(QThread):
                     path_str = self.queue.pop(0)
                 
                 filename = os.path.basename(path_str)
-                self.status_changed.emit(f"indexing: {filename}")
+                self.current_status = f"indexing: {filename}"
                 
                 try:
                     self.index_file(path_str)
@@ -152,7 +153,7 @@ class IndexingWorker(QThread):
                     print(f"Error indexing {path_str}: {e}")
             else:
                 if self.scanning_complete:
-                    self.status_changed.emit("idle")
+                    self.current_status = "idle"
                 time.sleep(0.1)
 
     def scan_next_batch(self, batch_size=50):
@@ -164,7 +165,7 @@ class IndexingWorker(QThread):
             except StopIteration:
                 self.scanning_complete = True
                 print("Directory scanning completed.")
-                self.status_changed.emit("scan completed")
+                self.current_status = "scan completed"
                 break
                 
             count += 1

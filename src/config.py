@@ -70,6 +70,10 @@ def get_model_config(key: str) -> dict:
 # Chunking settings
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
+# Cap chunks per document so a single huge file (e.g. a multi-MB log/export)
+# cannot monopolize the indexer for a very long time. ~2000 chunks covers the
+# first ~900KB of text, which is plenty for a document to be findable.
+MAX_CHUNKS_PER_DOC = 2000
 
 # Watcher settings
 DEBOUNCE_DELAY_SEC = 1.0
