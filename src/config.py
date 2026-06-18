@@ -84,13 +84,13 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 def get_default_watch_dirs():
     """Returns a list of default watch directories, focusing on Documents."""
     docs = Path(os.path.expanduser("~")) / "Documents"
-    project_root = Path(__file__).resolve().parent.parent
-    test_watch = project_root / "test_watch"
-    test_watch.mkdir(parents=True, exist_ok=True)
-    
     dirs = []
     if docs.exists():
         dirs.append(str(docs).replace("\\", "/"))
-    if test_watch.exists():
+    # test_watch is a dev-only convenience. In the frozen app __file__ lives in a
+    # temporary PyInstaller extraction dir, so creating/watching it is pointless.
+    if not FROZEN:
+        test_watch = Path(__file__).resolve().parent.parent / "test_watch"
+        test_watch.mkdir(parents=True, exist_ok=True)
         dirs.append(str(test_watch).replace("\\", "/"))
     return dirs

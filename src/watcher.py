@@ -214,6 +214,8 @@ class IndexingWorker(QThread):
         # 1. Extract text, chunk it, and hash each chunk plus the whole document.
         text = extract_text(filepath_str)
         chunks = chunk_text(text) if text.strip() else []
+        if not chunks:
+            print(f"No indexable text extracted from {filepath_str} (empty or scanned without OCR).")
         chunk_hashes = [hash_text(c) for c in chunks]
         # Document content hash derived from the ordered chunk hashes.
         content_hash = hash_text("\x1f".join(chunk_hashes))

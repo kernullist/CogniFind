@@ -27,8 +27,59 @@ def extract_text_from_txt(filepath: Path) -> str:
             continue
     raise ValueError(f"Could not decode text file {filepath} with supported encodings.")
 
+# Optional OCR fallback for scanned/image PDFs. The dependencies (PyMuPDF for
+# page rendering, rapidocr-onnxruntime for recognition) are heavy and optional;
+# they are imported lazily so the core works without them. When absent, scanned
+# PDFs are simply detected and skipped (logged), not OCR'd.
+_ocr_engine = None
+_ocr_unavailable = False
+
+def _get_ocr_engine():
+    """Returns a cached RapidOCR engine, or None if rapidocr is not installed."""
+    global _ocr_engine, _ocr_unavailable
+    if _ocr_engine is not None:
+        return _ocr_engine
+    if _ocr_unavailable:
+        return None
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        _ocr_engine = RapidOCR()
+        return _ocr_engine
+    except Exception as e:
+        print(f"OCR fallback unavailable (rapidocr-onnxruntime not installed): {e}")
+        _ocr_unavailable = True
+        return None
+
+def ocr_pdf(filepath: Path) -> str:
+    """Renders each PDF page to an image and runs OCR. Returns text or '' if OCR
+    is unavailable or fails."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        print("OCR fallback skipped: PyMuPDF (fitz) not installed.")
+        return ""
+    engine = _get_ocr_engine()
+    if engine is None:
+        return ""
+
+    texts = []
+    try:
+        doc = fitz.open(str(filepath))
+        try:
+            for page in doc:
+                pix = page.get_pixmap(dpi=200)
+                result, _ = engine(pix.tobytes("png"))
+                if result:
+                    texts.append(" ".join(line[1] for line in result))
+        finally:
+            doc.close()
+    except Exception as e:
+        print(f"OCR failed for {filepath}: {e}")
+        return ""
+    return "\n".join(texts)
+
 def extract_text_from_pdf(filepath: Path) -> str:
-    """Extracts text content from a PDF file."""
+    """Extracts text content from a PDF file, falling back to OCR for scans."""
     texts = []
     try:
         with open(filepath, 'rb') as f:
@@ -43,7 +94,19 @@ def extract_text_from_pdf(filepath: Path) -> str:
                     continue
     except Exception as e:
         print(f"Error opening PDF {filepath}: {e}")
-    return "\n".join(texts)
+
+    combined = "\n".join(texts)
+    if combined.strip():
+        return combined
+
+    # No embedded text layer -- likely a scanned/image PDF. Try OCR if available.
+    print(f"No text layer in PDF {filepath}; attempting OCR fallback...")
+    ocr_text = ocr_pdf(filepath)
+    if ocr_text.strip():
+        print(f"OCR extracted {len(ocr_text)} chars from {filepath}.")
+        return ocr_text
+    print(f"No extractable text from PDF {filepath} (scanned and OCR unavailable, or empty).")
+    return combined
 
 def extract_text_from_docx(filepath: Path) -> str:
     """Extracts text content from paragraphs and tables in a Word document."""

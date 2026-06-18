@@ -94,6 +94,12 @@ a = Analysis(
         'pandas', 'plotly', 'bokeh',
         'IPython', 'jupyter', 'notebook',
         'pytest', 'pip', 'wheel',
+        # Optional OCR deps are kept out of the lean portable build (OCR is
+        # opt-in and import-guarded in src/parser.py). To enable OCR for scanned
+        # PDFs: `pip install pymupdf rapidocr-onnxruntime`, remove these from
+        # excludes, add 'fitz' and 'rapidocr_onnxruntime' to hidden_imports, and
+        # rebuild (the build grows ~100MB).
+        'fitz', 'pymupdf', 'rapidocr_onnxruntime', 'cv2',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

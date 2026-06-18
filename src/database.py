@@ -2,6 +2,7 @@ import sqlite3
 import sqlite_vec
 import hashlib
 import json
+from pathlib import Path
 from datetime import datetime
 from src.config import DB_PATH, DEFAULT_MODEL_KEY, get_model_config
 
@@ -370,6 +371,25 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
     conn.close()
     return results
 
+import re
+_PYINSTALLER_TEMP_RE = re.compile(r"^_MEI\d+$", re.IGNORECASE)
+
+def _filter_watch_dirs(dirs: list[str]) -> list[str]:
+    """Drops monitored dirs pointing into a PyInstaller onefile extraction dir
+    (a path component like _MEI123456), e.g. a stale test_watch saved by an
+    older frozen build."""
+    out = []
+    for d in dirs:
+        try:
+            parts = Path(d).parts
+        except Exception:
+            out.append(d)
+            continue
+        if any(_PYINSTALLER_TEMP_RE.match(part) for part in parts):
+            continue
+        out.append(d)
+    return out
+
 def get_monitored_dirs() -> list[str]:
     """Retrieves monitored directories from settings, or returns defaults if empty."""
     conn = get_db_connection()
@@ -377,14 +397,17 @@ def get_monitored_dirs() -> list[str]:
     cursor.execute("SELECT value FROM settings WHERE key = 'monitored_dirs'")
     row = cursor.fetchone()
     conn.close()
-    
+
     if row:
-        import json
         try:
-            return json.loads(row['value'])
+            dirs = json.loads(row['value'])
+            cleaned = _filter_watch_dirs(dirs)
+            if cleaned != dirs:
+                save_monitored_dirs(cleaned)
+            return cleaned
         except Exception:
             pass
-            
+
     from src.config import get_default_watch_dirs
     defaults = get_default_watch_dirs()
     save_monitored_dirs(defaults)

@@ -10,7 +10,7 @@ ContextFinder is a 100% offline, on-device local semantic document search utilit
 - **Low-Resource Background Indexing**: Automatically monitors system idle state using the Windows API. When active user input (mouse/keyboard) is detected, background indexing throttles its CPU usage to keep the operating system highly responsive.
 - **Real-Time Watchdog**: Automatically detects file additions, modifications, renames, and deletions. Uses a debounced event queue to prevent redundant indexing during active file saves.
 - **Spotlight-Style Search Popup**: A borderless, semi-transparent dark-themed overlay that is activated via a global system hotkey (Win + Alt + F) or by clicking the tray icon.
-- **Supported Formats**: Parses and indexes Text/Markdown (.txt, .md), PDF (.pdf), Word (.docx), and Excel (.xlsx) files.
+- **Supported Formats**: Parses and indexes Text/Markdown (.txt, .md), PDF (.pdf), Word (.docx), and Excel (.xlsx) files. Scanned/image PDFs (no text layer) are detected and logged; an optional OCR fallback can recover their text (see below).
 - **Hybrid Metadata Filtering**: Combines semantic vector similarity search with file metadata filters (file type, date range).
 - **Modern UI**: Built with Tauri + React + TypeScript for a fast, responsive user experience.
 
@@ -195,6 +195,31 @@ stays in place, so updates are small. (WebView2 Runtime is required on the
 target machine — preinstalled on current Windows 10/11.)
 
 Output files will be in `frontend/src-tauri/target/release/bundle/`.
+
+---
+
+## Optional: OCR for scanned PDFs
+
+PDFs without a text layer (scanned/image PDFs) yield no text from normal
+extraction. They are detected and logged, and skipped from search. To recover
+their text via offline OCR, install the optional dependencies:
+
+```bash
+pip install pymupdf rapidocr-onnxruntime
+```
+
+With these present, `src/parser.py` automatically renders each page and runs
+OCR (ONNX-based, fully offline — no external engine) as a fallback. OCR is slow
+(seconds per page) and these libraries add ~100MB, so they are **not** bundled
+in the default portable build. To include OCR in a build, also remove the OCR
+entries from `excludes` in `cognifind-backend.spec` and add `fitz` and
+`rapidocr_onnxruntime` to `hidden_imports`.
+
+You can find which files failed extraction with:
+
+```bash
+python scripts/inspect_index.py     # flags documents with 0 chunks
+```
 
 ---
 
