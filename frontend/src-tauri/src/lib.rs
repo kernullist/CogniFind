@@ -95,11 +95,6 @@ fn stop_backend_sidecar(state: &AppState) {
     }
 }
 
-const TRAY_ICON: Image<'_> = Image::new(
-    include_bytes!("../icons/icon.png"),
-    256,
-    256,
-);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -153,8 +148,11 @@ pub fn run() {
             let search_item = MenuItem::with_id(app, "search", "Search Documents", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&search_item, &scan_item, &quit_item])?;
 
+            // Decode the PNG into RGBA. (Image::new expects raw RGBA pixels, so
+            // passing PNG bytes there produced a broken/garbage tray icon.)
+            let tray_icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
             let _tray = TrayIconBuilder::with_id("tray")
-                .icon(TRAY_ICON)
+                .icon(tray_icon)
                 .tooltip("ContextFinder - Local Semantic Search")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
