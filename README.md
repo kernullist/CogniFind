@@ -46,7 +46,7 @@ Download and run the installer from the releases page:
 1. **Install Python dependencies**:
 
 ```bash
-pip install PySide6 watchdog pypdf python-docx openpyxl onnxruntime sqlite-vec huggingface_hub numpy fastapi uvicorn pyinstaller
+pip install PySide6 watchdog pypdf python-docx openpyxl onnxruntime sqlite-vec huggingface_hub numpy fastapi uvicorn pyinstaller pymupdf rapidocr-onnxruntime
 ```
 
 2. **Install Tauri CLI**:
@@ -198,28 +198,30 @@ Output files will be in `frontend/src-tauri/target/release/bundle/`.
 
 ---
 
-## Optional: OCR for scanned PDFs
+## OCR for scanned PDFs
 
 PDFs without a text layer (scanned/image PDFs) yield no text from normal
-extraction. They are detected and logged, and skipped from search. To recover
-their text via offline OCR, install the optional dependencies:
+extraction. CogniFind detects these and falls back to OCR: it renders each page
+with PyMuPDF and recognizes text with `rapidocr-onnxruntime` (ONNX-based, fully
+offline — no external engine). OCR is **bundled in the build** (it adds ~80MB
+and is slow, a few seconds per page, but runs only on PDFs with no text layer).
+
+For development, install the OCR libraries so OCR runs under `dev.ps1`:
 
 ```bash
 pip install pymupdf rapidocr-onnxruntime
 ```
 
-With these present, `src/parser.py` automatically renders each page and runs
-OCR (ONNX-based, fully offline — no external engine) as a fallback. OCR is slow
-(seconds per page) and these libraries add ~100MB, so they are **not** bundled
-in the default portable build. To include OCR in a build, also remove the OCR
-entries from `excludes` in `cognifind-backend.spec` and add `fitz` and
-`rapidocr_onnxruntime` to `hidden_imports`.
-
-You can find which files failed extraction with:
+If these are not installed, OCR is skipped gracefully (scanned PDFs are detected
+and logged, just not searchable). Find files that failed extraction with:
 
 ```bash
 python scripts/inspect_index.py     # flags documents with 0 chunks
 ```
+
+> Note: enabling OCR does not retroactively re-index PDFs that were already
+> recorded as empty (their content hash is unchanged, so they are skipped).
+> Delete those documents (or modify the files) to force a re-index with OCR.
 
 ---
 

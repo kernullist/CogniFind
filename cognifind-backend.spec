@@ -2,6 +2,7 @@
 
 import os
 import importlib
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
@@ -36,6 +37,8 @@ hidden_imports = [
     'lxml',
     'lxml.etree',
     'lxml._elementpath',
+    'fitz',
+    'rapidocr_onnxruntime',
     'numpy',
     'pypdf',
     'docx',
@@ -77,6 +80,15 @@ try:
 except ImportError:
     pass
 
+# OCR (optional): bundle rapidocr's ONNX models + config.yaml and submodules so
+# OCR works in the frozen exe. Harmless if rapidocr is not installed.
+try:
+    import rapidocr_onnxruntime  # noqa: F401
+    datas += collect_data_files('rapidocr_onnxruntime')
+    hidden_imports += collect_submodules('rapidocr_onnxruntime')
+except ImportError:
+    pass
+
 a = Analysis(
     ['api.py'],
     pathex=[],
@@ -87,19 +99,13 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'matplotlib', 'scipy', 'PIL', 'tkinter', 'unittest', 'test',
+        'matplotlib', 'scipy', 'tkinter', 'unittest', 'test',
         'torch', 'torchvision', 'torchaudio', 'torchtext',
         'tensorflow', 'keras',
         'sklearn', 'scikit-learn',
         'pandas', 'plotly', 'bokeh',
         'IPython', 'jupyter', 'notebook',
         'pytest', 'pip', 'wheel',
-        # Optional OCR deps are kept out of the lean portable build (OCR is
-        # opt-in and import-guarded in src/parser.py). To enable OCR for scanned
-        # PDFs: `pip install pymupdf rapidocr-onnxruntime`, remove these from
-        # excludes, add 'fitz' and 'rapidocr_onnxruntime' to hidden_imports, and
-        # rebuild (the build grows ~100MB).
-        'fitz', 'pymupdf', 'rapidocr_onnxruntime', 'cv2',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

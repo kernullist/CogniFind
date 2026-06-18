@@ -27,14 +27,21 @@ if ($missing.Count -gt 0) {
 }
 Write-Host "  All prerequisites OK." -ForegroundColor Green
 
-# Step 2: Install PyInstaller if needed
-Write-Host "[2/6] Ensuring PyInstaller is installed..." -ForegroundColor Yellow
+# Step 2: Install build dependencies (PyInstaller + OCR libs bundled for
+# scanned-PDF support). The spec lists fitz/rapidocr_onnxruntime as hidden
+# imports, so they must be present at build time.
+Write-Host "[2/6] Ensuring build dependencies..." -ForegroundColor Yellow
 $pipResult = python -m pip show pyinstaller 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  Installing PyInstaller..." -ForegroundColor Gray
     python -m pip install pyinstaller --quiet
 }
-Write-Host "  PyInstaller OK." -ForegroundColor Green
+python -m pip install --quiet pymupdf rapidocr-onnxruntime
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Failed to install OCR dependencies!" -ForegroundColor Red
+    exit 1
+}
+Write-Host "  Build dependencies OK." -ForegroundColor Green
 
 # Step 3: Build Python backend with PyInstaller
 Write-Host "[3/6] Building Python backend (PyInstaller)..." -ForegroundColor Yellow
