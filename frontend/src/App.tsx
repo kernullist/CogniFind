@@ -71,10 +71,12 @@ function formatDate(iso: string): string {
 function ResultItem({
   item,
   selected,
+  onSelect,
   onOpen,
 }: {
   item: SearchResult;
   selected: boolean;
+  onSelect: () => void;
   onOpen: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -93,7 +95,7 @@ function ResultItem({
     <div
       ref={ref}
       className={`result-item ${selected ? "selected" : ""}`}
-      onClick={onOpen}
+      onClick={onSelect}
       onDoubleClick={onOpen}
     >
       <div className="result-row1">
@@ -247,11 +249,6 @@ export default function App() {
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIdx((prev) => Math.max(prev - 1, 0));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (results[selectedIdx]) {
-        handleOpen(results[selectedIdx].file_path);
-      }
     } else if (e.key === "Escape") {
       getCurrentWindow().hide();
     }
@@ -343,6 +340,7 @@ export default function App() {
             key={`${item.file_path}-${item.chunk_index}`}
             item={item}
             selected={idx === selectedIdx}
+            onSelect={() => setSelectedIdx(idx)}
             onOpen={() => handleOpen(item.file_path)}
           />
         ))}

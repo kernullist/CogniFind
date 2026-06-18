@@ -207,7 +207,7 @@ CREATE INDEX idx_documents_file_path ON documents(file_path);
               ▼
       [React 렌더링] ➔ 결과 리스트 표시
               │
-              ▼ (더블클릭 또는 Enter)
+              ▼ (더블클릭)
       [POST /api/open-file] ➔ Windows 기본 프로그램으로 파일 오픈
 ```
 

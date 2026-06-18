@@ -153,7 +153,7 @@ npx tauri dev
 
 1. **Trigger the Search Bar**: Press **Win + Alt + F** from anywhere on your system to toggle the borderless search pop-up.
 
-2. **Navigate & Open**: Type your natural language query. Results will update in real-time. Use the **Up/Down Arrow Keys** to navigate and press **Enter** (or double-click) to open the selected document with its default Windows application. Press **Escape** or click outside the window to dismiss the search bar.
+2. **Navigate & Open**: Type your natural language query. Results update in real-time. Use the **Up/Down Arrow Keys** to highlight a result; **single-click** selects, and **double-click** opens the document with its default Windows application. (Enter does not open a file, to avoid launching the wrong/stale top result by accident.) Press **Escape** or click outside the window to dismiss the search bar.
 
 3. **Filter Results**: Use the dropdown filters to narrow results by date range (Today, This Week, This Month) or file type (PDF, DOCX, XLSX, TXT, MD).
 
