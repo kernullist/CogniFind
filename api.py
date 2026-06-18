@@ -124,7 +124,10 @@ def _init_engine_background():
 
     monitored_dirs = get_monitored_dirs()
     print(f"Monitored directories: {monitored_dirs}")
-    _start_indexing(engine, monitored_dirs)
+    # Skip if a concurrent settings/model change already started indexing, to
+    # avoid leaving two workers running.
+    if worker is None:
+        _start_indexing(engine, monitored_dirs)
 
 
 @asynccontextmanager
@@ -247,6 +250,9 @@ async def get_settings():
 def update_settings(req: SettingsRequest):
     global worker, watcher
 
+    if embedding_engine is None:
+        raise HTTPException(status_code=503, detail="Embedding model is still loading")
+
     save_monitored_dirs(req.monitored_dirs)
 
     if watcher:
@@ -283,6 +289,11 @@ async def get_model():
 @app.put("/api/model")
 def set_model(req: ModelRequest):
     global embedding_engine, worker, watcher
+
+    # Refuse until the initial engine load has finished, so this cannot race the
+    # background init and leave two workers / a wrong engine running.
+    if embedding_engine is None:
+        raise HTTPException(status_code=503, detail="Embedding model is still loading")
 
     if req.model_key not in EMBEDDING_MODELS:
         raise HTTPException(status_code=400, detail=f"Unknown model key: {req.model_key}")
