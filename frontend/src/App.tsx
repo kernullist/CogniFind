@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { searchDocuments, openFile, getIndexStatus, getModels, setModel } from "./api";
 import type { SearchResult, DateFilter, ExtFilter, SearchFilters, ModelInfo, DownloadState, IndexInfo } from "./types";
 import "./App.css";
@@ -128,6 +129,7 @@ export default function App() {
   const [indexInfo, setIndexInfo] = useState<IndexInfo | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
+  const searchIdRef = useRef(0);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -192,9 +194,11 @@ export default function App() {
   const doSearch = useCallback(
     async (q: string, df: DateFilter, ef: ExtFilter) => {
       if (!q.trim()) {
+        searchIdRef.current++; // invalidate any in-flight request
         setResults([]);
         return;
       }
+      const reqId = ++searchIdRef.current;
       setLoading(true);
       try {
         const filters: SearchFilters = {
@@ -203,13 +207,16 @@ export default function App() {
           extensions: getExtensions(ef),
         };
         const data = await searchDocuments(q, filters);
+        // Ignore stale responses: a newer query may have been issued while this
+        // one was in flight (otherwise it could overwrite fresher results).
+        if (reqId !== searchIdRef.current) return;
         setResults(data);
         setSelectedIdx(0);
       } catch (e) {
         console.error("Search error:", e);
-        setResults([]);
+        if (reqId === searchIdRef.current) setResults([]);
       } finally {
-        setLoading(false);
+        if (reqId === searchIdRef.current) setLoading(false);
       }
     },
     []
@@ -246,7 +253,7 @@ export default function App() {
         handleOpen(results[selectedIdx].file_path);
       }
     } else if (e.key === "Escape") {
-      (window as any).__TAURI__?.window?.getCurrentWindow()?.hide();
+      getCurrentWindow().hide();
     }
   };
 
