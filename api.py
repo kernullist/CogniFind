@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI):
     # and the UI can poll /api/status to render the download progress bar.
     Thread(target=_init_engine_background, daemon=True).start()
 
-    print("ContextFinder API server started.")
+    print("CogniFind API server started.")
 
     yield
 
@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
         worker.stop()
 
 
-app = FastAPI(title="ContextFinder API", lifespan=lifespan)
+app = FastAPI(title="CogniFind API", lifespan=lifespan)
 
 # Restrict CORS to the Tauri webview origins instead of "*":
 #   - http://localhost:5173      : Vite dev server (devUrl)
@@ -194,8 +194,10 @@ def search(req: SearchRequest):
     if embedding_engine is None:
         raise HTTPException(status_code=503, detail="Embedding model is still loading")
     try:
-        query_vector = embedding_engine.get_embedding(req.query.strip(), is_query=True)
+        query = req.query.strip()
+        query_vector = embedding_engine.get_embedding(query, is_query=True)
         results = query_similar_documents(
+            query,
             query_vector,
             limit=req.limit,
             file_extensions=req.extensions,

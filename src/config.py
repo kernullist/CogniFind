@@ -63,6 +63,11 @@ EMBEDDING_MODELS = {
 
 DEFAULT_MODEL_KEY = "minilm"
 
+# Hybrid search: how much a lexical (keyword/substring) match boosts a result's
+# semantic score. final = semantic_similarity + weight * lexical_fraction. Helps
+# short/acronym/exact-term queries (e.g. "dma") where pure dense search is weak.
+HYBRID_KEYWORD_WEIGHT = 0.3
+
 def get_model_config(key: str) -> dict:
     """Returns the registry entry for a model key, falling back to the default."""
     return EMBEDDING_MODELS.get(key, EMBEDDING_MODELS[DEFAULT_MODEL_KEY])

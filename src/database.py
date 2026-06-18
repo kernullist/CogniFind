@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from datetime import datetime
-from src.config import DB_PATH, DEFAULT_MODEL_KEY, get_model_config
+from src.config import DB_PATH, DEFAULT_MODEL_KEY, get_model_config, HYBRID_KEYWORD_WEIGHT
 
 def hash_text(text: str) -> str:
     """Returns the SHA-256 hex digest of a text string (used for change detection)."""
@@ -284,14 +284,26 @@ def get_all_indexed_files() -> dict[str, dict]:
     conn.close()
     return results
 
-def query_similar_documents(query_vector: list[float], limit: int = 5, file_extensions: list[str] = None, date_from: str = None, date_to: str = None) -> list[dict]:
-    """Performs KNN vector similarity search joined with document metadata."""
+def _query_terms(text: str) -> list[str]:
+    """Extracts distinct lexical terms (English/number runs and Korean syllable
+    runs, length >= 2) from a query, capped to keep lexical scanning cheap."""
+    found = re.findall(r"[a-z0-9]{2,}|[가-힣]{2,}", (text or "").lower())
+    out = []
+    for t in found:
+        if t not in out:
+            out.append(t)
+    return out[:8]
+
+def query_similar_documents(query_text: str, query_vector: list[float], limit: int = 5, file_extensions: list[str] = None, date_from: str = None, date_to: str = None) -> list[dict]:
+    """Hybrid search: semantic (vector) similarity re-ranked with a lexical
+    keyword boost. Pure dense search is weak for short/acronym/exact-term
+    queries (e.g. "dma"); the lexical boost promotes documents that literally
+    contain the query terms (especially in the file name)."""
     conn = get_db_connection()
     cursor = conn.cursor()
 
     serialized_query = sqlite_vec.serialize_float32(query_vector)
 
-    # Total number of candidate vectors. Used to size the KNN fetch.
     total = cursor.execute("SELECT COUNT(*) FROM chunk_embeddings").fetchone()[0]
     if total == 0:
         conn.close()
@@ -299,20 +311,15 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
 
     has_filters = bool(file_extensions or date_from or date_to)
 
-    # The metadata filters (extension/date) are applied AFTER the vec0 KNN
-    # returns its top-k rows, so a small k can be entirely filtered out and
-    # yield far fewer than `limit` results even when matching documents exist.
-    # sqlite-vec KNN is brute-force (it scores every vector regardless of k),
-    # so when filters are present we set k to the full candidate count to keep
-    # results correct; the only extra cost is sorting/returning more rows.
-    # Without filters we keep the cheap limit*3 over-fetch for de-duplication.
-    if has_filters:
-        k = total
-    else:
-        k = min(limit * 3, total)
+    # sqlite-vec KNN is brute-force, so k only bounds returned rows. Over-fetch a
+    # larger candidate pool than `limit` so lexical re-ranking can promote a
+    # keyword match that scored slightly lower semantically. With metadata
+    # filters (applied after the KNN) use the full set to avoid empty results.
+    k = total if has_filters else min(limit * 10, total)
 
     sql = """
         SELECT
+            d.id AS doc_id,
             d.file_path,
             d.file_name,
             d.file_extension,
@@ -326,36 +333,29 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
         JOIN documents d ON c.document_id = d.id
         WHERE ce.embedding MATCH ? AND k = ?
     """
-
     params = [serialized_query, k]
 
     if file_extensions:
         exts_placeholders = ",".join("?" for _ in file_extensions)
         sql += f" AND d.file_extension IN ({exts_placeholders})"
         params.extend([ext.lower() for ext in file_extensions])
-
     if date_from:
         sql += " AND d.last_modified >= ?"
         params.append(date_from)
-
     if date_to:
         sql += " AND d.last_modified <= ?"
         params.append(date_to)
 
     sql += " ORDER BY ce.distance ASC"
-
     cursor.execute(sql, params)
 
-    results = []
-    seen_files = {}
-
+    # Keep the best-scoring (closest) chunk per document for display.
+    cand = {}
     for row in cursor.fetchall():
         path = row['file_path']
-        sim = row['similarity']
-
-        if path not in seen_files:
-            seen_files[path] = sim
-            results.append({
+        if path not in cand:
+            cand[path] = {
+                'doc_id': row['doc_id'],
                 'file_path': path,
                 'file_name': row['file_name'],
                 'file_extension': row['file_extension'],
@@ -363,13 +363,52 @@ def query_similar_documents(query_vector: list[float], limit: int = 5, file_exte
                 'last_modified': row['last_modified'],
                 'text_content': row['text_content'],
                 'chunk_index': row['chunk_index'],
-                'similarity': sim
-            })
-            if len(results) >= limit:
-                break
+                'semantic': row['similarity'],
+                'lexical': 0.0,
+            }
+
+    # Lexical scoring over the candidate documents. A term found in the file name
+    # counts full; in the content, partial. lexical = weighted fraction of terms.
+    terms = _query_terms(query_text)
+    if terms and cand:
+        doc_ids = [c['doc_id'] for c in cand.values()]
+        ph = ",".join("?" for _ in doc_ids)
+        content_hits = {}
+        for term in terms:
+            rows = cursor.execute(
+                f"SELECT DISTINCT document_id FROM document_chunks "
+                f"WHERE document_id IN ({ph}) AND lower(text_content) LIKE ?",
+                doc_ids + [f"%{term}%"],
+            ).fetchall()
+            for r in rows:
+                content_hits.setdefault(r[0], set()).add(term)
+        for c in cand.values():
+            fn = c['file_name'].lower()
+            chits = content_hits.get(c['doc_id'], set())
+            score = 0.0
+            for t in terms:
+                if t in fn:
+                    score += 1.0
+                elif t in chits:
+                    score += 0.7
+            c['lexical'] = score / len(terms)
 
     conn.close()
-    return results
+
+    for c in cand.values():
+        c['final'] = c['semantic'] + HYBRID_KEYWORD_WEIGHT * c['lexical']
+
+    ranked = sorted(cand.values(), key=lambda c: c['final'], reverse=True)[:limit]
+    return [{
+        'file_path': c['file_path'],
+        'file_name': c['file_name'],
+        'file_extension': c['file_extension'],
+        'file_size': c['file_size'],
+        'last_modified': c['last_modified'],
+        'text_content': c['text_content'],
+        'chunk_index': c['chunk_index'],
+        'similarity': min(1.0, c['final']),
+    } for c in ranked]
 
 import re
 _PYINSTALLER_TEMP_RE = re.compile(r"^_MEI\d+$", re.IGNORECASE)
