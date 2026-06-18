@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { searchDocuments, openFile, getIndexStatus, getModels, setModel } from "./api";
-import type { SearchResult, DateFilter, ExtFilter, SearchFilters, ModelInfo, DownloadState } from "./types";
+import type { SearchResult, DateFilter, ExtFilter, SearchFilters, ModelInfo, DownloadState, IndexInfo } from "./types";
 import "./App.css";
 
 // Format a Date as a local-time naive ISO string (no timezone / no "Z").
@@ -125,6 +125,7 @@ export default function App() {
   const [activeModel, setActiveModel] = useState<string>("");
   const [switchingModel, setSwitchingModel] = useState(false);
   const [download, setDownload] = useState<DownloadState | null>(null);
+  const [indexInfo, setIndexInfo] = useState<IndexInfo | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -143,11 +144,13 @@ export default function App() {
         if (cancelled) return;
         setStatus(s.status);
         setDownload(s.model ?? null);
+        setIndexInfo(s.index ?? null);
         timer = setTimeout(poll, s.model?.downloading ? 700 : 3000);
       } catch {
         if (cancelled) return;
         setStatus("Backend offline");
         setDownload(null);
+        setIndexInfo(null);
         timer = setTimeout(poll, 3000);
       }
     };
@@ -339,7 +342,12 @@ export default function App() {
       </div>
 
       <div className="status-bar">
-        <span className="status-text">{status}</span>
+        <span className="status-text">
+          {status}
+          {indexInfo &&
+            ` · ${indexInfo.documents.toLocaleString()} indexed` +
+              (indexInfo.queued > 0 ? ` · ${indexInfo.queued.toLocaleString()} queued` : "")}
+        </span>
         <span className="shortcut-hint">Win + Alt + F | Esc to Close</span>
       </div>
     </div>

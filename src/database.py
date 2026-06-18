@@ -261,6 +261,14 @@ def is_document_indexed(file_path: str) -> bool:
     finally:
         conn.close()
 
+def count_documents() -> int:
+    """Returns the number of documents currently indexed."""
+    conn = get_db_connection()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+    finally:
+        conn.close()
+
 def get_all_indexed_files() -> dict[str, dict]:
     """Returns a dict mapping file_path to its modification time and size."""
     conn = get_db_connection()

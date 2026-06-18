@@ -36,6 +36,7 @@ from src.database import (
     save_monitored_dirs,
     query_similar_documents,
     is_document_indexed,
+    count_documents,
     get_active_model_key,
     set_active_model_key,
     clear_index,
@@ -209,11 +210,29 @@ def search(req: SearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Non-async: it does a blocking COUNT(*) on the DB, which should run in the
+# threadpool rather than on the event loop.
 @app.get("/api/status")
-async def get_status():
+def get_status():
     with model_lock:
         model_info = dict(model_state)
-    return {"status": worker_status, "model": model_info}
+    try:
+        documents = count_documents()
+    except Exception:
+        documents = 0
+    if worker is not None:
+        progress = worker.get_index_progress()
+    else:
+        progress = {"queued": 0, "scanning": False}
+    return {
+        "status": worker_status,
+        "model": model_info,
+        "index": {
+            "documents": documents,
+            "queued": progress["queued"],
+            "scanning": progress["scanning"],
+        },
+    }
 
 
 @app.get("/api/settings")

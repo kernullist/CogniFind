@@ -286,6 +286,12 @@ class IndexingWorker(QThread):
             # User idle: sleep minimally to prevent pegging CPU at 100%
             time.sleep(0.01)
 
+    def get_index_progress(self) -> dict:
+        """Returns the current queue depth and whether the initial scan is ongoing."""
+        with self.lock:
+            queued = len(self.queue) + len(self.debounce_queue)
+        return {"queued": queued, "scanning": not self.scanning_complete}
+
     def queue_file_for_indexing(self, filepath_str: str):
         """Queues file for debounced indexing."""
         filepath_str = filepath_str.replace("\\", "/")

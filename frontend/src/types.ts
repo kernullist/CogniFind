@@ -32,9 +32,16 @@ export interface DownloadState {
   error: string | null;
 }
 
+export interface IndexInfo {
+  documents: number;
+  queued: number;
+  scanning: boolean;
+}
+
 export interface IndexStatus {
   status: string;
   model: DownloadState;
+  index: IndexInfo;
 }
 
 export type DateFilter = "all" | "today" | "week" | "month";
