@@ -78,6 +78,13 @@ MAX_CHUNKS_PER_DOC = 2000
 # Watcher settings
 DEBOUNCE_DELAY_SEC = 1.0
 
+# CPU throttle: seconds slept per chunk during indexing, by activity state.
+# Embedding a chunk is brief (~10ms), so even the "active" value stays gentle
+# (~15% duty cycle) while keeping indexing responsive.
+THROTTLE_IDLE_THRESHOLD_SEC = 5.0   # idle longer than this -> index fast
+THROTTLE_ACTIVE_SEC = 0.05          # machine in active use
+THROTTLE_IDLE_SEC = 0.01            # machine idle
+
 # Supported file extensions
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".xlsx"}
 

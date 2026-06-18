@@ -341,7 +341,7 @@ C:\Program Files\CogniFind\
 
 - **Windows API 연동**: `GetLastInputInfo()`로 시스템 유휴 시간 감지
 - **적응형 슬립**:
-  - 사용자 활동 중 (idle < 5초): 250ms 슬립 per chunk
+  - 사용자 활동 중 (idle < 5초): 50ms 슬립 per chunk
   - 유휴 상태 (idle >= 5초): 10ms 슬립 per chunk
 - **스레드 우선순위**: `QThread.IdlePriority`로 백그라운드 스레드 우선순위 낮춤
 

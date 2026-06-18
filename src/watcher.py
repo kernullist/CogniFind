@@ -15,6 +15,9 @@ from src.config import (
     MAX_FILE_SIZE_BYTES,
     IGNORED_DIR_NAMES,
     is_ignored_path,
+    THROTTLE_IDLE_THRESHOLD_SEC,
+    THROTTLE_ACTIVE_SEC,
+    THROTTLE_IDLE_SEC,
 )
 from src.database import (
     get_db_connection,
@@ -293,12 +296,12 @@ class IndexingWorker(QThread):
     def throttle_cpu(self):
         """Sleeps to throttle CPU usage based on user idle state."""
         idle_seconds = get_idle_duration()
-        if idle_seconds < 5.0:
-            # User active: throttle heavily
-            time.sleep(0.25) # Sleep 250ms per chunk
+        if idle_seconds < THROTTLE_IDLE_THRESHOLD_SEC:
+            # User active: stay gentle but responsive.
+            time.sleep(THROTTLE_ACTIVE_SEC)
         else:
-            # User idle: sleep minimally to prevent pegging CPU at 100%
-            time.sleep(0.01)
+            # User idle: index quickly without pegging the CPU at 100%.
+            time.sleep(THROTTLE_IDLE_SEC)
 
     def get_index_progress(self) -> dict:
         """Returns the current queue depth and whether the initial scan is ongoing."""
