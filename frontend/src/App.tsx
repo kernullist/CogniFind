@@ -166,12 +166,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    getModels()
-      .then((m) => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    // The backend takes a few seconds to start listening; retry until the model
+    // list loads instead of leaving the model selector hidden forever.
+    const load = async () => {
+      try {
+        const m = await getModels();
+        if (cancelled) return;
         setModels(m.available);
         setActiveModel(m.active);
-      })
-      .catch((e) => console.error("Model list error:", e));
+      } catch {
+        if (cancelled) return;
+        timer = setTimeout(load, 2000);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   const handleModelChange = useCallback(
