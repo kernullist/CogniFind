@@ -77,11 +77,14 @@ try {
 }
 Write-Host "  Frontend dependencies OK." -ForegroundColor Green
 
-# Step 5: Build Tauri application
-Write-Host "[5/6] Building Tauri application..." -ForegroundColor Yellow
+# Step 5: Build Tauri application (exe only; the portable package does not need
+# NSIS/MSI installers). Must go through the Tauri CLI so the frontend assets are
+# embedded for production -- a plain `cargo build` produces an exe that tries to
+# load the dev server (localhost) and fails with ERR_CONNECTION_REFUSED.
+Write-Host "[5/6] Building Tauri application (exe, no installer)..." -ForegroundColor Yellow
 Push-Location (Join-Path $ROOT "frontend")
 try {
-    npx tauri build
+    npx tauri build --no-bundle
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Tauri build failed!" -ForegroundColor Red
         exit 1
