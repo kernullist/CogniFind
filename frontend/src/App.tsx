@@ -346,6 +346,27 @@ export default function App() {
 
       <div className="results-list">
         {loading && <div className="loading">Searching...</div>}
+        {!loading && !query.trim() && (
+          <div className="empty-state">
+            <svg className="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="10.5" cy="10.5" r="7" />
+              <line x1="15.8" y1="15.8" x2="21" y2="21" strokeLinecap="round" />
+            </svg>
+            <div className="empty-title">Search your documents by meaning</div>
+            {indexInfo && indexInfo.documents > 0 && (
+              <div className="empty-sub">
+                {indexInfo.documents.toLocaleString()} documents indexed
+              </div>
+            )}
+            <div className="empty-examples">
+              {["kernel cheat detection", "dma", "연말정산"].map((ex) => (
+                <button key={ex} className="example-chip" onClick={() => setQuery(ex)}>
+                  {ex}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {!loading && results.length === 0 && query.trim() && (
           <div className="no-results">No results found</div>
         )}
