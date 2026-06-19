@@ -8,7 +8,7 @@
 
 - **100% 프라이버시 보호 (Zero-Cloud)**: 문서 내용을 외부 API나 클라우드 서버로 일절 전송하지 않고 모든 AI 임베딩 연산과 데이터베이스 저장을 사용자 PC 로컬 내에서 완수합니다.
 - **초경량 백그라운드 운용 (Low-Resource)**: 일반 사무용 PC의 CPU 환경에서도 가볍게 동작하며, 백그라운드 색인 중 시스템 자원 점유율을 최소화합니다.
-- **Windows 시스템 친화성**: 시스템 트레이(System Tray)에 상주하며, 단축키(`Win + Alt + F` 등) 클릭 시 즉각적인 자연어 쿼리 팝업 창을 렌더링합니다.
+- **Windows 시스템 친화성**: 시스템 트레이(System Tray)에 상주하며, 단축키(`Ctrl + Alt + F` 등) 클릭 시 즉각적인 자연어 쿼리 팝업 창을 렌더링합니다.
 - **메타데이터 하이브리드 검색**: 의미론적 유사성(Vector Cosine Similarity)과 파일 메타데이터(파일 형식, 수정일 범위) 필터링을 결합한 하이브리드 검색을 제공합니다.
 - **모던 UI/UX**: Tauri + React + TypeScript 기반의 빠르고 반응성 높은 사용자 인터페이스를 제공합니다.
 
@@ -23,7 +23,7 @@ graph TD
     User([사용자]) <--> TauriUI[Tauri 프론트엔드<br/>Rust + React + TypeScript]
     
     subgraph Tauri_Process [Tauri 프로세스]
-        GlobalHotkey[글로벌 핫키<br/>Alt+Super+F]
+        GlobalHotkey[글로벌 핫키<br/>Ctrl+Alt+F]
         SystemTray[시스템 트레이]
         ProcessManager[Python 프로세스 관리]
     end
@@ -225,7 +225,7 @@ CREATE INDEX idx_documents_file_path ON documents(file_path);
                     │       │       ├─► watchdog 파일 감시 시작
                     │       │       └─► 초기 디렉토리 스캔
                     │       │
-                    │       ├─► [글로벌 핫키 등록] (Alt+Super+F)
+                    │       ├─► [글로벌 핫키 등록] (Ctrl+Alt+F)
                     │       ├─► [시스템 트레이 아이콘 표시]
                     │       └─► [메인 윈도우 생성] (숨김 상태)
                     │
@@ -274,7 +274,7 @@ CREATE INDEX idx_documents_file_path ON documents(file_path);
 ## 7. Windows 시스템 트레이 및 단축키 연동 상세 (System Integration)
 
 - **백그라운드 상주**: 앱을 실행하면 바탕화면에 작업 창이 나타나지 않고, Windows 우측 하단 알림 영역(System Tray)에 CogniFind 돋보기 아이콘이 활성화됩니다.
-- **글로벌 핫키 등록**: Tauri의 `tauri-plugin-global-shortcut`을 사용하여 `Alt + Super + F`를 등록합니다. 사용자가 어느 화면에 있든 해당 단축키를 누르면 화면 정중앙에 투명 효과가 적용된 검색 팝업을 즉시 오픈합니다.
+- **글로벌 핫키 등록**: Tauri의 `tauri-plugin-global-shortcut`을 사용하여 `Ctrl + Alt + F`를 등록합니다. 사용자가 어느 화면에 있든 해당 단축키를 누르면 화면 정중앙에 투명 효과가 적용된 검색 팝업을 즉시 오픈합니다.
 - **파일 더블클릭 액션**: 검색 결과 리스트에서 파일을 더블클릭하면 `/api/open-file` 엔드포인트를 통해 Windows OS 내부 `os.startfile(filepath)` API를 호출하여 사용자가 평소 사용하던 기본 문서 편집기(Acrobat Reader, MS Word, Notepad++ 등)로 즉각 파일을 실행해 줍니다.
 - **트레이 컨텍스트 메뉴**:
   - **Search Documents**: 검색 창 열기

@@ -9,7 +9,7 @@ CogniFind is a 100% offline, on-device local semantic document search utility fo
 - **Zero-Cloud Privacy**: All vector embeddings and SQLite databases are calculated and stored locally on your machine.
 - **Low-Resource Background Indexing**: Automatically monitors system idle state using the Windows API. When active user input (mouse/keyboard) is detected, background indexing throttles its CPU usage to keep the operating system highly responsive.
 - **Real-Time Watchdog**: Automatically detects file additions, modifications, renames, and deletions. Uses a debounced event queue to prevent redundant indexing during active file saves.
-- **Spotlight-Style Search Popup**: A borderless, semi-transparent dark-themed overlay that is activated via a global system hotkey (Win + Alt + F) or by clicking the tray icon.
+- **Spotlight-Style Search Popup**: A borderless, semi-transparent dark-themed overlay that is activated via a global system hotkey (Ctrl + Alt + F) or by clicking the tray icon.
 - **Supported Formats**: Parses and indexes Text/Markdown (.txt, .md), PDF (.pdf), Word (.docx), and Excel (.xlsx) files. Scanned/image PDFs (no text layer) are detected and logged; an optional OCR fallback can recover their text (see below).
 - **Hybrid Metadata Filtering**: Combines semantic vector similarity search with file metadata filters (file type, date range).
 - **Modern UI**: Built with Tauri + React + TypeScript for a fast, responsive user experience.
@@ -81,7 +81,7 @@ CogniFind uses a **dual-process architecture**:
 ┌─────────────────────────────────┐
 │   Tauri Frontend (Rust + React) │
 │  - Frameless transparent window │
-│  - Global hotkey (Alt+Super+F)  │
+│  - Global hotkey (Ctrl+Alt+F)  │
 │  - System tray icon             │
 │  - Python process management    │
 └──────────────┬──────────────────┘
@@ -151,7 +151,7 @@ npx tauri dev
 
 ### Using the Search
 
-1. **Trigger the Search Bar**: Press **Win + Alt + F** from anywhere on your system to toggle the borderless search pop-up.
+1. **Trigger the Search Bar**: Press **Ctrl + Alt + F** from anywhere on your system to toggle the borderless search pop-up.
 
 2. **Navigate & Open**: Type your natural language query. Results update in real-time. Use the **Up/Down Arrow Keys** to highlight a result; **single-click** selects, and **double-click** opens the document with its default Windows application. (Enter does not open a file, to avoid launching the wrong/stale top result by accident.) Press **Escape** or click outside the window to dismiss the search bar.
 

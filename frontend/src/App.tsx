@@ -388,7 +388,7 @@ export default function App() {
             ` · ${indexInfo.documents.toLocaleString()} indexed` +
               (indexInfo.queued > 0 ? ` · ${indexInfo.queued.toLocaleString()} queued` : "")}
         </span>
-        <span className="shortcut-hint">Win + Alt + F | Esc to Close</span>
+        <span className="shortcut-hint">Ctrl + Alt + F | Esc to Close</span>
       </div>
     </div>
   );

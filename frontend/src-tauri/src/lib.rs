@@ -222,21 +222,19 @@ pub fn run() {
             // instance), log and continue instead of aborting setup, which
             // would close the app.
             let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts(["Alt+Super+F"])
+                .with_shortcuts(["Ctrl+Alt+F"])
                 .unwrap()
-                .with_handler(|app, shortcut, event| {
+                .with_handler(|app, _shortcut, event| {
+                    // Only one shortcut is registered, so any Pressed event is ours.
                     if event.state == ShortcutState::Pressed {
-                        let shortcut_str = format!("{:?}", shortcut);
-                        if shortcut_str.contains("'F'") || shortcut_str.contains("KeyF") {
-                            if let Some(window) = app.get_webview_window("main") {
-                                toggle_window(&window);
-                            }
+                        if let Some(window) = app.get_webview_window("main") {
+                            toggle_window(&window);
                         }
                     }
                 })
                 .build();
             if let Err(e) = app.handle().plugin(shortcut_plugin) {
-                log::error!("Failed to register global shortcut Alt+Super+F: {}", e);
+                log::error!("Failed to register global shortcut Ctrl+Alt+F: {}", e);
             }
 
             let quit_item = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
