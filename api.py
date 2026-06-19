@@ -311,10 +311,6 @@ def set_model(req: ModelRequest):
     if worker:
         worker.stop()
         worker.wait()
-        try:
-            worker.status_changed.disconnect(on_status_changed)
-        except (RuntimeError, TypeError):
-            pass
 
     # Persist the choice, wipe the now-incompatible index, recreate the vec table
     # sized for the new model, and re-index from scratch.
