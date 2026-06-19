@@ -10,6 +10,76 @@ use tauri_plugin_global_shortcut::ShortcutState;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+// Hard single-instance enforcement via a named mutex, checked at the very start
+// of run() -- before any Tauri/window/tray/backend initialization -- so a second
+// launch cannot create a stray tray icon or backend. A named auto-reset event
+// lets the second launch ask the running instance to focus its window.
+#[cfg(windows)]
+mod single_instance {
+    use std::iter::once;
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+    use windows_sys::Win32::System::Threading::{
+        CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE,
+        INFINITE,
+    };
+
+    const MUTEX_NAME: &str = "CogniFind_SingleInstance_Mutex_v1";
+    const EVENT_NAME: &str = "CogniFind_Activate_Event_v1";
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(once(0)).collect()
+    }
+
+    /// Become the single instance. Returns the owned mutex handle on success
+    /// (keep it alive for the process lifetime). Returns None if another instance
+    /// already exists -- after signalling it to activate its window.
+    pub fn acquire() -> Option<HANDLE> {
+        let name = wide(MUTEX_NAME);
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        let already = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+        if handle.is_null() {
+            // Could not create the mutex; do not block a legitimate launch.
+            return Some(std::ptr::null_mut());
+        }
+        if already {
+            signal_activate();
+            unsafe { CloseHandle(handle) };
+            return None;
+        }
+        Some(handle)
+    }
+
+    fn signal_activate() {
+        let name = wide(EVENT_NAME);
+        let ev = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+        if !ev.is_null() {
+            unsafe {
+                SetEvent(ev);
+                CloseHandle(ev);
+            }
+        }
+    }
+
+    /// Spawns a thread that runs `on_activate` whenever a second launch signals.
+    pub fn spawn_activation_listener<F: Fn() + Send + 'static>(on_activate: F) {
+        std::thread::spawn(move || {
+            let name = wide(EVENT_NAME);
+            // Auto-reset, initially non-signalled.
+            let ev = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+            if ev.is_null() {
+                return;
+            }
+            loop {
+                // WAIT_OBJECT_0 == 0 means signalled; anything else -> stop.
+                if unsafe { WaitForSingleObject(ev, INFINITE) } != 0 {
+                    break;
+                }
+                on_activate();
+            }
+        });
+    }
+}
+
 struct AppState {
     // Sidecar process (production: bundled cognifind-backend.exe).
     backend_child: Mutex<Option<CommandChild>>,
@@ -98,16 +168,16 @@ fn stop_backend_sidecar(state: &AppState) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Hard single-instance gate: if another instance already holds the named
+    // mutex, this call signals it to focus and returns None -- we exit here,
+    // before Tauri creates any window/tray/backend.
+    #[cfg(windows)]
+    let _instance_mutex = match single_instance::acquire() {
+        Some(handle) => handle,
+        None => return,
+    };
+
     tauri::Builder::default()
-        // Must be registered first. On a second launch, focus the existing
-        // window instead of starting another instance.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
-        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_dialog::init())
@@ -127,6 +197,23 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let state = app.state::<AppState>();
             start_backend_sidecar(&app_handle, &state);
+
+            // When a second launch is blocked by the mutex gate, it signals this
+            // running instance to bring its window to the front.
+            #[cfg(windows)]
+            {
+                let activate_handle = app.handle().clone();
+                single_instance::spawn_activation_listener(move || {
+                    let h = activate_handle.clone();
+                    let _ = activate_handle.run_on_main_thread(move || {
+                        if let Some(window) = h.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    });
+                });
+            }
 
             std::thread::sleep(std::time::Duration::from_secs(2));
 
