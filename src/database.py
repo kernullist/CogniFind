@@ -101,13 +101,27 @@ def _get_setting(cursor, key: str):
     return row[0] if row else None
 
 def get_active_model_key() -> str:
-    """Returns the persisted embedding model key, defaulting if unset."""
+    """Returns the embedding model key, choosing and persisting a default if
+    unset. The choice is locked in so it stays consistent with the index:
+    - an existing (non-empty) index was built with the historical default, so
+      keep that to avoid mixing incompatible vectors;
+    - only a fresh, empty index may adopt the locale-aware default (e.g. the
+      Korean model on a Korean system)."""
     conn = get_db_connection()
     try:
         key = _get_setting(conn.cursor(), "embedding_model")
-        return key or DEFAULT_MODEL_KEY
     finally:
         conn.close()
+    if key:
+        return key
+
+    from src.config import get_default_model_key
+    if count_documents() > 0:
+        key = DEFAULT_MODEL_KEY
+    else:
+        key = get_default_model_key()
+    set_active_model_key(key)
+    return key
 
 def set_active_model_key(key: str):
     """Persists the active embedding model key."""

@@ -72,6 +72,30 @@ def get_model_config(key: str) -> dict:
     """Returns the registry entry for a model key, falling back to the default."""
     return EMBEDDING_MODELS.get(key, EMBEDDING_MODELS[DEFAULT_MODEL_KEY])
 
+def _is_korean_locale() -> bool:
+    """True if the Windows UI/regional language is Korean."""
+    try:
+        import ctypes
+        # LANG_KOREAN == 0x12; primary language is the low 10 bits of the LANGID.
+        for fn in ("GetUserDefaultUILanguage", "GetUserDefaultLangID"):
+            langid = getattr(ctypes.windll.kernel32, fn)()
+            if (langid & 0x3FF) == 0x12:
+                return True
+    except Exception:
+        pass
+    try:
+        import locale
+        return (locale.getdefaultlocale()[0] or "").lower().startswith("ko")
+    except Exception:
+        return False
+
+def get_default_model_key() -> str:
+    """First-run default model: the multilingual model on a Korean system, the
+    fast English model otherwise. Only used when the index is still empty."""
+    if "e5-multilingual" in EMBEDDING_MODELS and _is_korean_locale():
+        return "e5-multilingual"
+    return DEFAULT_MODEL_KEY
+
 # Chunking settings
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
