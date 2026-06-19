@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { searchDocuments, openFile, getIndexStatus, getModels, setModel } from "./api";
+import { searchDocuments, openFile, getIndexStatus, getModels, setModel, getSettings, setSettings, pickFolder } from "./api";
 import type { SearchResult, DateFilter, ExtFilter, SearchFilters, ModelInfo, DownloadState, IndexInfo } from "./types";
 import "./App.css";
 
@@ -129,6 +129,9 @@ export default function App() {
   const [switchingModel, setSwitchingModel] = useState(false);
   const [download, setDownload] = useState<DownloadState | null>(null);
   const [indexInfo, setIndexInfo] = useState<IndexInfo | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [folders, setFolders] = useState<string[]>([]);
+  const [folderBusy, setFolderBusy] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchIdRef = useRef(0);
@@ -256,6 +259,47 @@ export default function App() {
     }
   }, []);
 
+  const openSettings = useCallback(async () => {
+    setShowSettings(true);
+    try {
+      const s = await getSettings();
+      setFolders(s.monitored_dirs);
+    } catch (e) {
+      console.error("Settings load error:", e);
+    }
+  }, []);
+
+  const saveFolders = useCallback((next: string[]) => {
+    setFolders(next);
+    setSettings(next).catch((e) => console.error("Settings save error:", e));
+  }, []);
+
+  const handleAddFolder = useCallback(async () => {
+    if (folderBusy) return;
+    setFolderBusy(true);
+    try {
+      const picked = await pickFolder();
+      if (picked) {
+        const norm = picked.replace(/\\/g, "/");
+        setFolders((prev) => {
+          if (prev.some((f) => f.toLowerCase() === norm.toLowerCase())) return prev;
+          const next = [...prev, norm];
+          setSettings(next).catch((e) => console.error("Settings save error:", e));
+          return next;
+        });
+      }
+    } catch (e) {
+      console.error("Folder pick error:", e);
+    } finally {
+      setFolderBusy(false);
+    }
+  }, [folderBusy]);
+
+  const handleRemoveFolder = useCallback(
+    (dir: string) => saveFolders(folders.filter((f) => f !== dir)),
+    [folders, saveFolders]
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -323,6 +367,15 @@ export default function App() {
             ))}
           </select>
         )}
+
+        <button
+          className={`settings-gear ${showSettings ? "active" : ""}`}
+          onClick={() => (showSettings ? setShowSettings(false) : openSettings())}
+          title="Watched folders"
+          aria-label="Settings"
+        >
+          ⚙
+        </button>
       </div>
 
       {download?.downloading && (
@@ -344,6 +397,42 @@ export default function App() {
 
       <div className="separator" />
 
+      {showSettings ? (
+        <div className="settings-panel">
+          <div className="settings-header">
+            <span className="settings-title">Watched folders</span>
+            <button className="settings-done" onClick={() => setShowSettings(false)}>
+              Done
+            </button>
+          </div>
+          <div className="folder-list">
+            {folders.length === 0 && (
+              <div className="folder-empty">No folders yet. Add one to start indexing.</div>
+            )}
+            {folders.map((f) => (
+              <div className="folder-row" key={f}>
+                <span className="folder-path" title={f}>
+                  {f}
+                </span>
+                <button
+                  className="folder-remove"
+                  onClick={() => handleRemoveFolder(f)}
+                  title="Remove this folder"
+                  aria-label="Remove folder"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+          <button className="add-folder-btn" onClick={handleAddFolder} disabled={folderBusy}>
+            {folderBusy ? "Opening…" : "+ Add folder"}
+          </button>
+          <div className="settings-note">
+            Removing a folder also removes its documents from search.
+          </div>
+        </div>
+      ) : (
       <div className="results-list">
         {loading && <div className="loading">Searching...</div>}
         {!loading && !query.trim() && (
@@ -380,6 +469,7 @@ export default function App() {
           />
         ))}
       </div>
+      )}
 
       <div className="status-bar">
         <span className="status-text">

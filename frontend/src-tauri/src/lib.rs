@@ -302,7 +302,7 @@ pub fn run() {
                     });
             }
         })
-        .invoke_handler(tauri::generate_handler![toggle_search_window])
+        .invoke_handler(tauri::generate_handler![toggle_search_window, pick_folder])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
@@ -320,6 +320,16 @@ fn toggle_search_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         toggle_window(&window);
     }
+}
+
+// Opens a native folder picker and returns the chosen path (or None if cancelled).
+// async so it runs off the main thread, where blocking_pick_folder is safe.
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .blocking_pick_folder()
+        .map(|p| p.to_string())
 }
 
 fn toggle_window(window: &tauri::WebviewWindow) {

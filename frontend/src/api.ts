@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { SearchResult, SearchFilters, ModelInfo, IndexStatus } from "./types";
 
 const API_BASE = "http://127.0.0.1:8765";
@@ -38,6 +39,26 @@ export async function openFile(path: string): Promise<void> {
 
 export async function triggerRescan(): Promise<void> {
   await fetch(`${API_BASE}/api/index/scan`, { method: "POST" });
+}
+
+export async function getSettings(): Promise<{ monitored_dirs: string[] }> {
+  const res = await fetch(`${API_BASE}/api/settings`);
+  if (!res.ok) throw new Error(`Settings fetch failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setSettings(dirs: string[]): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ monitored_dirs: dirs }),
+  });
+  if (!res.ok) throw new Error(`Settings save failed: ${res.statusText}`);
+}
+
+// Opens the native folder picker (Rust command). Returns the path, or null if cancelled.
+export async function pickFolder(): Promise<string | null> {
+  return await invoke<string | null>("pick_folder");
 }
 
 export async function getModels(): Promise<{ active: string; available: ModelInfo[] }> {

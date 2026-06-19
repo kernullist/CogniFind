@@ -37,6 +37,7 @@ from src.database import (
     query_similar_documents,
     is_document_indexed,
     count_documents,
+    purge_documents_outside,
     get_active_model_key,
     set_active_model_key,
     clear_index,
@@ -258,6 +259,12 @@ def update_settings(req: SettingsRequest):
     if worker:
         worker.stop()
         worker.wait()
+
+    # Drop documents that are no longer under any monitored folder, so removing
+    # a folder also removes its documents from search.
+    purged = purge_documents_outside(req.monitored_dirs)
+    if purged:
+        print(f"Removed {purged} documents from de-selected folders.")
 
     monitored_dirs = req.monitored_dirs
     _start_indexing(embedding_engine, monitored_dirs)

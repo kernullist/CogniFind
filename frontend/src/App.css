@@ -53,6 +53,133 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+.settings-gear {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: #d1d5db;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.settings-gear:hover,
+.settings-gear.active {
+  background-color: rgba(139, 92, 246, 0.18);
+  color: #c4b5fd;
+}
+
+.settings-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-title {
+  font-size: 13px;
+  color: #9ca3af;
+  font-weight: 600;
+}
+
+.settings-done {
+  background: none;
+  border: none;
+  color: #8b5cf6;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.folder-empty {
+  color: #6b7280;
+  font-size: 13px;
+  padding: 8px 2px;
+}
+
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+
+.folder-path {
+  flex: 1;
+  font-size: 13px;
+  color: #d1d5db;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.folder-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  background-color: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 5px;
+  color: #f87171;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.folder-remove:hover {
+  background-color: rgba(239, 68, 68, 0.25);
+}
+
+.add-folder-btn {
+  align-self: flex-start;
+  background-color: rgba(139, 92, 246, 0.14);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  color: #c4b5fd;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.add-folder-btn:hover:not(:disabled) {
+  background-color: rgba(139, 92, 246, 0.24);
+}
+
+.add-folder-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.settings-note {
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
 .download-bar {
   flex-shrink: 0;
   display: flex;

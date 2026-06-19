@@ -276,6 +276,25 @@ def is_document_indexed(file_path: str) -> bool:
     finally:
         conn.close()
 
+def purge_documents_outside(monitored_dirs: list[str]) -> int:
+    """Deletes indexed documents that no longer fall under any monitored dir,
+    so removing a folder from the watch list also removes its documents from
+    search. Returns the number removed."""
+    norm = [d.replace("\\", "/").rstrip("/").lower() for d in monitored_dirs]
+    conn = get_db_connection()
+    try:
+        paths = [r['file_path'] for r in conn.execute("SELECT file_path FROM documents").fetchall()]
+    finally:
+        conn.close()
+
+    removed = 0
+    for fp in paths:
+        low = fp.replace("\\", "/").lower()
+        if not any(low == d or low.startswith(d + "/") for d in norm):
+            delete_document_by_path(fp)
+            removed += 1
+    return removed
+
 def count_documents() -> int:
     """Returns the number of documents currently indexed."""
     conn = get_db_connection()
