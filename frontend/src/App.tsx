@@ -129,6 +129,7 @@ export default function App() {
   const [switchingModel, setSwitchingModel] = useState(false);
   const [download, setDownload] = useState<DownloadState | null>(null);
   const [indexInfo, setIndexInfo] = useState<IndexInfo | null>(null);
+  const [backendUp, setBackendUp] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [folders, setFolders] = useState<string[]>([]);
   const [folderBusy, setFolderBusy] = useState(false);
@@ -149,16 +150,20 @@ export default function App() {
       try {
         const s = await getIndexStatus();
         if (cancelled) return;
+        setBackendUp(true);
         setStatus(s.status);
         setDownload(s.model ?? null);
         setIndexInfo(s.index ?? null);
-        timer = setTimeout(poll, s.model?.downloading ? 700 : 3000);
+        // Poll faster while still preparing (backend booting / model loading).
+        const preparing = s.model?.downloading || !s.model?.ready;
+        timer = setTimeout(poll, preparing ? 700 : 3000);
       } catch {
         if (cancelled) return;
-        setStatus("Backend offline");
+        setBackendUp(false);
+        setStatus("Starting...");
         setDownload(null);
         setIndexInfo(null);
-        timer = setTimeout(poll, 3000);
+        timer = setTimeout(poll, 700);
       }
     };
     poll();
@@ -312,6 +317,14 @@ export default function App() {
     }
   };
 
+  // Still preparing if the backend isn't up yet or the model hasn't loaded.
+  const ready = backendUp && (download?.ready ?? false);
+  const prepTitle = !backendUp
+    ? "Starting CogniFind…"
+    : download?.downloading
+    ? "Downloading model…"
+    : "Loading embedding model…";
+
   return (
     <div className="app-container">
       <div className="search-bar">
@@ -378,26 +391,25 @@ export default function App() {
         </button>
       </div>
 
-      {download?.downloading && (
-        <div className="download-bar">
-          <div className="download-label">
-            Downloading model{download.model ? ` (${download.model})` : ""}
-            {download.total > 0
-              ? ` — ${download.percent.toFixed(0)}%  ${formatSize(download.downloaded)} / ${formatSize(download.total)}`
-              : ` — ${formatSize(download.downloaded)}`}
-          </div>
-          <div className="download-track">
-            <div
-              className={`download-fill${download.total > 0 ? "" : " indeterminate"}`}
-              style={download.total > 0 ? { width: `${download.percent}%` } : undefined}
-            />
-          </div>
-        </div>
-      )}
-
       <div className="separator" />
 
-      {showSettings ? (
+      {!ready ? (
+        <div className="preparing">
+          <div className="spinner" />
+          <div className="preparing-title">{prepTitle}</div>
+          {download?.downloading && download.total > 0 && (
+            <div className="prep-progress">
+              <div className="prep-track">
+                <div className="prep-fill" style={{ width: `${download.percent}%` }} />
+              </div>
+              <div className="prep-pct">
+                {download.percent.toFixed(0)}% · {formatSize(download.downloaded)} / {formatSize(download.total)}
+              </div>
+            </div>
+          )}
+          <div className="preparing-sub">First launch can take a moment while everything starts up.</div>
+        </div>
+      ) : showSettings ? (
         <div className="settings-panel">
           <div className="settings-header">
             <span className="settings-title">Watched folders</span>
