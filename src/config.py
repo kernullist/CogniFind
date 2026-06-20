@@ -68,6 +68,11 @@ DEFAULT_MODEL_KEY = "minilm"
 # short/acronym/exact-term queries (e.g. "dma") where pure dense search is weak.
 HYBRID_KEYWORD_WEIGHT = 0.3
 
+# Hard upper bound on the k value in a sqlite-vec KNN query. vec0 rejects any
+# larger k with "k value in knn query too large" (the built-in limit is 4096).
+# Metadata-filtered searches must clamp their candidate pool to this.
+VEC_MAX_K = 4096
+
 def get_model_config(key: str) -> dict:
     """Returns the registry entry for a model key, falling back to the default."""
     return EMBEDDING_MODELS.get(key, EMBEDDING_MODELS[DEFAULT_MODEL_KEY])

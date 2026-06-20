@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from datetime import datetime
-from src.config import DB_PATH, DEFAULT_MODEL_KEY, get_model_config, HYBRID_KEYWORD_WEIGHT
+from src.config import DB_PATH, DEFAULT_MODEL_KEY, get_model_config, HYBRID_KEYWORD_WEIGHT, VEC_MAX_K
 
 def hash_text(text: str) -> str:
     """Returns the SHA-256 hex digest of a text string (used for change detection)."""
@@ -363,8 +363,12 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
     # sqlite-vec KNN is brute-force, so k only bounds returned rows. Over-fetch a
     # larger candidate pool than `limit` so lexical re-ranking can promote a
     # keyword match that scored slightly lower semantically. With metadata
-    # filters (applied after the KNN) use the full set to avoid empty results.
+    # filters (applied after the KNN) widen the pool toward the full set so the
+    # post-filter still has matches to return. vec0 caps k at VEC_MAX_K, so clamp
+    # to it -- a larger k raises "k value in knn query too large" and the search
+    # would return nothing (e.g. a Type=PDF filter over a large index).
     k = total if has_filters else min(limit * 10, total)
+    k = min(k, VEC_MAX_K)
 
     sql = """
         SELECT

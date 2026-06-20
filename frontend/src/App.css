@@ -483,26 +483,3 @@ html, body, #root {
   font-size: 12px;
   color: #6b7280;
 }
-
-.empty-examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-  margin-top: 8px;
-}
-
-.example-chip {
-  background-color: rgba(139, 92, 246, 0.12);
-  border: 1px solid rgba(139, 92, 246, 0.3);
-  color: #c4b5fd;
-  border-radius: 999px;
-  padding: 5px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.example-chip:hover {
-  background-color: rgba(139, 92, 246, 0.22);
-}

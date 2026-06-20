@@ -459,13 +459,6 @@ export default function App() {
                 {indexInfo.documents.toLocaleString()} documents indexed
               </div>
             )}
-            <div className="empty-examples">
-              {["kernel cheat detection", "dma", "연말정산"].map((ex) => (
-                <button key={ex} className="example-chip" onClick={() => setQuery(ex)}>
-                  {ex}
-                </button>
-              ))}
-            </div>
           </div>
         )}
         {!loading && results.length === 0 && query.trim() && (
