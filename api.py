@@ -55,6 +55,10 @@ watcher = None
 worker_status = "starting"
 shutting_down = False
 
+# Serializes all worker/watcher lifecycle changes (startup init, settings change,
+# model switch) so concurrent requests cannot leave two workers running.
+worker_lock = Lock()
+
 # Shared embedding-model / download state, polled by the UI via /api/status.
 model_lock = Lock()
 model_state = {
@@ -88,8 +92,20 @@ def _set_model_state(**kwargs):
         model_state.update(kwargs)
 
 
+def _stop_indexing():
+    """Stops the running worker + watcher. Caller must hold worker_lock."""
+    global worker, watcher
+    if watcher is not None:
+        watcher.stop()
+        watcher = None
+    if worker is not None:
+        worker.stop()
+        worker.wait()
+        worker = None
+
+
 def _start_indexing(engine, monitored_dirs):
-    """Creates and starts the worker + watcher for the given engine/dirs."""
+    """Creates and starts the worker + watcher. Caller must hold worker_lock."""
     global worker, watcher
     worker = IndexingWorker(engine, monitored_dirs)
     watcher = WatcherManager(monitored_dirs, worker)
@@ -117,26 +133,25 @@ def _init_engine_background():
     embedding_engine = engine
     _set_model_state(ready=True, downloading=False, percent=100.0, error=None)
 
-    # If the existing index was built with a different model, its vectors are not
-    # comparable with the active model's -- re-index. The model the index was
-    # built with is taken from the recorded index_model, falling back to the
-    # persisted embedding_model (which tracks it), then the historical default.
-    # This is what makes a Korean system switch an old (minilm) index over to the
-    # Korean model on first run, without needlessly re-indexing a matching one.
-    index_model = get_index_model() or get_setting("embedding_model") or DEFAULT_MODEL_KEY
-    if count_documents() > 0 and index_model != active_model:
-        print(f"Index was built with '{index_model}', active model is '{active_model}'; clearing for re-index.")
-        clear_index(engine.dim)
-    set_index_model(active_model)
+    with worker_lock:
+        # A concurrent settings/model change may have already started indexing.
+        if worker is not None or shutting_down:
+            return
 
-    if shutting_down:
-        return
+        # If the existing index was built with a different model, its vectors are
+        # not comparable with the active model's -- re-index. The model the index
+        # was built with comes from the recorded index_model, falling back to the
+        # persisted embedding_model (which tracks it), then the historical
+        # default. This makes a Korean system switch an old (minilm) index over to
+        # the Korean model on first run, without re-indexing a matching one.
+        index_model = get_index_model() or get_setting("embedding_model") or DEFAULT_MODEL_KEY
+        if count_documents() > 0 and index_model != active_model:
+            print(f"Index was built with '{index_model}', active model is '{active_model}'; clearing for re-index.")
+            clear_index(engine.dim)
+        set_index_model(active_model)
 
-    monitored_dirs = get_monitored_dirs()
-    print(f"Monitored directories: {monitored_dirs}")
-    # Skip if a concurrent settings/model change already started indexing, to
-    # avoid leaving two workers running.
-    if worker is None:
+        monitored_dirs = get_monitored_dirs()
+        print(f"Monitored directories: {monitored_dirs}")
         _start_indexing(engine, monitored_dirs)
 
 
@@ -157,10 +172,8 @@ async def lifespan(app: FastAPI):
 
     print("Shutting down...")
     shutting_down = True
-    if watcher:
-        watcher.stop()
-    if worker:
-        worker.stop()
+    with worker_lock:
+        _stop_indexing()
 
 
 app = FastAPI(title="CogniFind API", lifespan=lifespan)
@@ -262,29 +275,22 @@ async def get_settings():
 # on the event loop. FastAPI dispatches sync handlers to the threadpool.
 @app.put("/api/settings")
 def update_settings(req: SettingsRequest):
-    global worker, watcher
-
     if embedding_engine is None:
         raise HTTPException(status_code=503, detail="Embedding model is still loading")
 
-    save_monitored_dirs(req.monitored_dirs)
+    with worker_lock:
+        save_monitored_dirs(req.monitored_dirs)
+        _stop_indexing()
 
-    if watcher:
-        watcher.stop()
-    if worker:
-        worker.stop()
-        worker.wait()
+        # Drop documents that are no longer under any monitored folder, so
+        # removing a folder also removes its documents from search.
+        purged = purge_documents_outside(req.monitored_dirs)
+        if purged:
+            print(f"Removed {purged} documents from de-selected folders.")
 
-    # Drop documents that are no longer under any monitored folder, so removing
-    # a folder also removes its documents from search.
-    purged = purge_documents_outside(req.monitored_dirs)
-    if purged:
-        print(f"Removed {purged} documents from de-selected folders.")
+        _start_indexing(embedding_engine, req.monitored_dirs)
 
-    monitored_dirs = req.monitored_dirs
-    _start_indexing(embedding_engine, monitored_dirs)
-
-    return {"monitored_dirs": monitored_dirs}
+    return {"monitored_dirs": req.monitored_dirs}
 
 
 @app.get("/api/model")
@@ -302,7 +308,7 @@ async def get_model():
 # blocks on QThread.wait(); both must run off the event loop.
 @app.put("/api/model")
 def set_model(req: ModelRequest):
-    global embedding_engine, worker, watcher
+    global embedding_engine
 
     # Refuse until the initial engine load has finished, so this cannot race the
     # background init and leave two workers / a wrong engine running.
@@ -327,21 +333,18 @@ def set_model(req: ModelRequest):
         raise HTTPException(status_code=500, detail=f"Failed to load model: {e}")
     _set_model_state(ready=True, downloading=False, percent=100.0, error=None)
 
-    # Stop indexing before swapping the engine and wiping the index.
-    if watcher:
-        watcher.stop()
-    if worker:
-        worker.stop()
-        worker.wait()
+    with worker_lock:
+        # Stop indexing before swapping the engine and wiping the index.
+        _stop_indexing()
 
-    # Persist the choice (as an explicit user choice), wipe the now-incompatible
-    # index, recreate the vec table sized for the new model, and re-index.
-    set_active_model_key(req.model_key, user_set=True)
-    clear_index(new_engine.dim)
-    set_index_model(req.model_key)
-    embedding_engine = new_engine
+        # Persist the choice (as an explicit user choice), wipe the now-incompatible
+        # index, recreate the vec table sized for the new model, and re-index.
+        set_active_model_key(req.model_key, user_set=True)
+        clear_index(new_engine.dim)
+        set_index_model(req.model_key)
+        embedding_engine = new_engine
 
-    _start_indexing(embedding_engine, get_monitored_dirs())
+        _start_indexing(embedding_engine, get_monitored_dirs())
 
     return {"active": req.model_key, "changed": True}
 

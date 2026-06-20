@@ -87,9 +87,10 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc_id ON document_chunks(document_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_documents_file_path ON documents(file_path);")
 
-    # 3. chunk_embeddings virtual table, sized for the active model's dimension.
-    active_dim = get_model_config(_get_setting(cursor, "embedding_model") or DEFAULT_MODEL_KEY)["dim"]
-    _create_embeddings_table(cursor, active_dim)
+    # 3. chunk_embeddings virtual table, sized for the ACTIVE model's dimension
+    #    (which may be the locale default, not the persisted embedding_model).
+    active_key = _resolve_active_model(lambda k: _get_setting(cursor, k))
+    _create_embeddings_table(cursor, get_model_config(active_key)["dim"])
 
     conn.commit()
     conn.close()
@@ -117,17 +118,23 @@ def set_setting(key: str, value: str):
     finally:
         conn.close()
 
+def _resolve_active_model(get_fn) -> str:
+    """Active model: the user's explicit choice if set, else the locale-aware
+    default. get_fn(key) reads a setting (cursor-based or own-connection), so
+    this can run inside init_db's transaction or standalone."""
+    from src.config import get_default_model_key
+    if get_fn("model_user_set") == "1":
+        saved = get_fn("embedding_model")
+        if saved:
+            return saved
+    return get_default_model_key()
+
 def get_active_model_key() -> str:
     """Returns the active embedding model: the user's explicit choice if they
     made one, otherwise the locale-aware default (the Korean model on a Korean
     system). Not persisted, so the default is re-evaluated each run until the
     user explicitly picks a model."""
-    from src.config import get_default_model_key
-    if get_setting("model_user_set") == "1":
-        saved = get_setting("embedding_model")
-        if saved:
-            return saved
-    return get_default_model_key()
+    return _resolve_active_model(get_setting)
 
 def set_active_model_key(key: str, user_set: bool = False):
     """Persists the active embedding model key. user_set=True marks it as an
