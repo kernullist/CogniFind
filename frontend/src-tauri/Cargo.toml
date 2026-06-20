@@ -1,6 +1,6 @@
 [package]
 name = "cognifind"
-version = "0.1.1"
+version = "0.1.2"
 description = "ContextFinder - Local Semantic Document Search"
 authors = ["you"]
 license = ""
