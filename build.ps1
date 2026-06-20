@@ -1,5 +1,8 @@
-# build.ps1 - CogniFind Full Build Script
-# Builds Python backend (PyInstaller) + Tauri frontend into a single installer
+# build.ps1 - CogniFind Build Script
+# Builds the Python backend (PyInstaller) + Tauri frontend into the portable
+# package (dist\CogniFind-portable). Pass -Release to bump the patch version
+# (baked into the exe) before building; otherwise it just builds.
+param([switch]$Release)
 
 $ErrorActionPreference = "Stop"
 
@@ -7,6 +10,29 @@ $ROOT = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TAURI_DIR = Join-Path $ROOT "frontend\src-tauri"
 $BINARIES_DIR = Join-Path $TAURI_DIR "binaries"
 $SIDECAR_NAME = "cognifind-backend-x86_64-pc-windows-msvc.exe"
+
+# --- Release: bump the patch version in the exe's version sources ---
+if ($Release) {
+    $CONF  = Join-Path $TAURI_DIR "tauri.conf.json"
+    $CARGO = Join-Path $TAURI_DIR "Cargo.toml"
+    $PKG   = Join-Path $ROOT "frontend\package.json"
+
+    $conf = Get-Content $CONF -Raw
+    if ($conf -match '"version":\s*"(\d+)\.(\d+)\.(\d+)"') {
+        $old = "$($matches[1]).$($matches[2]).$($matches[3])"
+        $new = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
+    } else {
+        Write-Host "ERROR: could not find version in tauri.conf.json" -ForegroundColor Red
+        exit 1
+    }
+
+    ((Get-Content $CONF -Raw)  -replace ('"version":\s*"' + [regex]::Escape($old) + '"'), ('"version": "' + $new + '"'))  | Set-Content $CONF -NoNewline -Encoding UTF8
+    ((Get-Content $CARGO -Raw) -replace ('(?m)^version = "' + [regex]::Escape($old) + '"'), ('version = "' + $new + '"')) | Set-Content $CARGO -NoNewline -Encoding UTF8
+    ((Get-Content $PKG -Raw)   -replace '"version":\s*"\d+\.\d+\.\d+"', ('"version": "' + $new + '"'))                    | Set-Content $PKG -NoNewline -Encoding UTF8
+
+    Write-Host "Release build: version bumped $old -> $new" -ForegroundColor Magenta
+    Write-Host ""
+}
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  CogniFind Build Pipeline" -ForegroundColor Cyan
@@ -130,13 +156,7 @@ try {
     Pop-Location
 }
 
-$ZIP = Join-Path $ROOT "dist\CogniFind-portable.zip"
-if (Test-Path $ZIP) {
-    Remove-Item $ZIP -Force
-}
-Compress-Archive -Path (Join-Path $PORTABLE_DIR "*") -DestinationPath $ZIP
 Write-Host "  Portable package: $PORTABLE_DIR" -ForegroundColor Green
-Write-Host "  Portable zip:     $ZIP" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
@@ -163,7 +183,8 @@ if (Test-Path $TAURI_EXE) {
 }
 
 Write-Host ""
-Write-Host "Distribution: ship dist\CogniFind-portable (or the .zip)." -ForegroundColor Cyan
+Write-Host "Portable build is at dist\CogniFind-portable." -ForegroundColor Cyan
+Write-Host "Run .\release.ps1 to bump the version and produce a distributable .zip." -ForegroundColor Cyan
 Write-Host "To UPDATE an existing install, replace only CogniFind.exe and" -ForegroundColor Cyan
 Write-Host "cognifind-backend.exe; the models\ folder persists." -ForegroundColor Cyan
 Write-Host ""
