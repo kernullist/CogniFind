@@ -215,8 +215,6 @@ pub fn run() {
                 });
             }
 
-            std::thread::sleep(std::time::Duration::from_secs(2));
-
             // Register the global shortcut exactly once, non-fatally: if the
             // hotkey is already taken (e.g. by another app or a leftover
             // instance), log and continue instead of aborting setup, which
@@ -261,8 +259,12 @@ pub fn run() {
                         }
                     }
                     "scan" => {
-                        let client = reqwest::blocking::Client::new();
-                        let _ = client.post("http://127.0.0.1:8765/api/index/scan").send();
+                        // Off the UI thread: a blocking HTTP call here would
+                        // freeze the menu/UI if the backend is slow.
+                        std::thread::spawn(|| {
+                            let client = reqwest::blocking::Client::new();
+                            let _ = client.post("http://127.0.0.1:8765/api/index/scan").send();
+                        });
                     }
                     _ => {}
                 })

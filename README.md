@@ -67,7 +67,7 @@ npm install
 ## How it Works
 
 1. **Pre-heating**: On startup, the Python backend loads the local embedding engine in a background thread (so the UI stays responsive and can show a download progress bar). It resolves model files in this order: the per-user cache (`~/.cognifind/models/`), then the models shipped next to the executable (`models/` in the portable folder, offline), and only then a download from the Hugging Face Hub if downloads are enabled. Production builds ship the models and run fully offline by default.
-2. **Directory Scanning**: Scans watched directories (configured in SQLite/settings, defaulting to your Documents directory and a local test_watch folder). It deletes records of removed files and queues new or modified files.
+2. **Directory Scanning**: Scans watched directories (configured in SQLite/settings or the in-app settings panel, defaulting to your Documents, Desktop, Downloads, and OneDrive folders). Build artifacts and dependency dirs (node_modules, .git, build, dist, target, etc.) are skipped. It deletes records of removed files and queues new or modified files.
 3. **Chunking & Embeddings**: Extracts text from documents, splits it into 500-character chunks with a 50-character overlap, converts them into 384-dimensional normalized vectors via ONNX Runtime, and saves them in the local database (~/.cognifind/contextfinder.db).
 4. **Vector Searching**: When you type a query, it is embedded into a vector, and a K-Nearest Neighbors (KNN) search is executed on the sqlite-vec virtual table using cosine distance.
 
