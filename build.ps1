@@ -17,8 +17,13 @@ if ($Release) {
     $CARGO = Join-Path $TAURI_DIR "Cargo.toml"
     $PKG   = Join-Path $ROOT "frontend\package.json"
 
-    $conf = Get-Content $CONF -Raw
-    if ($conf -match '"version":\s*"(\d+)\.(\d+)\.(\d+)"') {
+    # Use .NET file IO so this is immune to any Get-Content/Set-Content proxies
+    # in the user's PowerShell profile (which can drop -Raw / -NoNewline).
+    # NOTE: PowerShell variables are case-insensitive, so the content holders
+    # must NOT reuse the path names ($CONF/$CARGO/$PKG) -- reusing them would
+    # overwrite the path variable with the file content.
+    $confText = [System.IO.File]::ReadAllText($CONF)
+    if ($confText -match '"version":\s*"(\d+)\.(\d+)\.(\d+)"') {
         $old = "$($matches[1]).$($matches[2]).$($matches[3])"
         $new = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
     } else {
@@ -26,9 +31,19 @@ if ($Release) {
         exit 1
     }
 
-    ((Get-Content $CONF -Raw)  -replace ('"version":\s*"' + [regex]::Escape($old) + '"'), ('"version": "' + $new + '"'))  | Set-Content $CONF -NoNewline -Encoding UTF8
-    ((Get-Content $CARGO -Raw) -replace ('(?m)^version = "' + [regex]::Escape($old) + '"'), ('version = "' + $new + '"')) | Set-Content $CARGO -NoNewline -Encoding UTF8
-    ((Get-Content $PKG -Raw)   -replace '"version":\s*"\d+\.\d+\.\d+"', ('"version": "' + $new + '"'))                    | Set-Content $PKG -NoNewline -Encoding UTF8
+    # tauri.conf.json
+    $confText = $confText -replace ('"version":\s*"' + [regex]::Escape($old) + '"'), ('"version": "' + $new + '"')
+    [System.IO.File]::WriteAllText($CONF, $confText)
+
+    # Cargo.toml (package version, at line start)
+    $cargoText = [System.IO.File]::ReadAllText($CARGO)
+    $cargoText = $cargoText -replace ('(?m)^version = "' + [regex]::Escape($old) + '"'), ('version = "' + $new + '"')
+    [System.IO.File]::WriteAllText($CARGO, $cargoText)
+
+    # package.json (its own version line, whatever value)
+    $pkgText = [System.IO.File]::ReadAllText($PKG)
+    $pkgText = $pkgText -replace '"version":\s*"\d+\.\d+\.\d+"', ('"version": "' + $new + '"')
+    [System.IO.File]::WriteAllText($PKG, $pkgText)
 
     Write-Host "Release build: version bumped $old -> $new" -ForegroundColor Magenta
     Write-Host ""

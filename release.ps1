@@ -22,9 +22,11 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# 2. Read the (now bumped) version.
-$conf = Get-Content $CONF -Raw
-if ($conf -match '"version":\s*"(\d+\.\d+\.\d+)"') {
+# 2. Read the (now bumped) version (.NET IO to avoid Get-Content proxy issues).
+#    Use a distinct content variable -- PowerShell is case-insensitive, so $conf
+#    would alias $CONF (the path) and clobber it.
+$confText = [System.IO.File]::ReadAllText($CONF)
+if ($confText -match '"version":\s*"(\d+\.\d+\.\d+)"') {
     $version = $matches[1]
 } else {
     Write-Host "ERROR: could not read version from tauri.conf.json" -ForegroundColor Red
