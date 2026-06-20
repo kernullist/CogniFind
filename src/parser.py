@@ -24,7 +24,10 @@ def extract_text_from_txt(filepath: Path) -> str:
         try:
             with open(filepath, 'r', encoding=encoding) as f:
                 return f.read()
-        except UnicodeDecodeError:
+        except UnicodeError:
+            # Broader than UnicodeDecodeError on purpose: the utf-16 codec raises
+            # a bare UnicodeError ("UTF-16 stream does not start with BOM") for
+            # files without a BOM, which must also fall through to the next codec.
             continue
     raise ValueError(f"Could not decode text file {filepath} with supported encodings.")
 
