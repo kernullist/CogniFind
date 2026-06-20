@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
-from src.config import EMBEDDING_MODELS
+from src.config import EMBEDDING_MODELS, DEFAULT_MODEL_KEY
 from src.embedding import EmbeddingEngine
 from src.database import (
     init_db,
@@ -40,6 +40,9 @@ from src.database import (
     purge_documents_outside,
     get_active_model_key,
     set_active_model_key,
+    get_index_model,
+    set_index_model,
+    get_setting,
     clear_index,
 )
 from src.watcher import IndexingWorker, WatcherManager
@@ -113,6 +116,18 @@ def _init_engine_background():
 
     embedding_engine = engine
     _set_model_state(ready=True, downloading=False, percent=100.0, error=None)
+
+    # If the existing index was built with a different model, its vectors are not
+    # comparable with the active model's -- re-index. The model the index was
+    # built with is taken from the recorded index_model, falling back to the
+    # persisted embedding_model (which tracks it), then the historical default.
+    # This is what makes a Korean system switch an old (minilm) index over to the
+    # Korean model on first run, without needlessly re-indexing a matching one.
+    index_model = get_index_model() or get_setting("embedding_model") or DEFAULT_MODEL_KEY
+    if count_documents() > 0 and index_model != active_model:
+        print(f"Index was built with '{index_model}', active model is '{active_model}'; clearing for re-index.")
+        clear_index(engine.dim)
+    set_index_model(active_model)
 
     if shutting_down:
         return
@@ -319,10 +334,11 @@ def set_model(req: ModelRequest):
         worker.stop()
         worker.wait()
 
-    # Persist the choice, wipe the now-incompatible index, recreate the vec table
-    # sized for the new model, and re-index from scratch.
-    set_active_model_key(req.model_key)
+    # Persist the choice (as an explicit user choice), wipe the now-incompatible
+    # index, recreate the vec table sized for the new model, and re-index.
+    set_active_model_key(req.model_key, user_set=True)
     clear_index(new_engine.dim)
+    set_index_model(req.model_key)
     embedding_engine = new_engine
 
     _start_indexing(embedding_engine, get_monitored_dirs())

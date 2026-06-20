@@ -100,40 +100,49 @@ def _get_setting(cursor, key: str):
     row = cursor.fetchone()
     return row[0] if row else None
 
-def get_active_model_key() -> str:
-    """Returns the embedding model key, choosing and persisting a default if
-    unset. The choice is locked in so it stays consistent with the index:
-    - an existing (non-empty) index was built with the historical default, so
-      keep that to avoid mixing incompatible vectors;
-    - only a fresh, empty index may adopt the locale-aware default (e.g. the
-      Korean model on a Korean system)."""
+def get_setting(key: str):
+    """Reads a settings value (own connection); returns None if absent."""
     conn = get_db_connection()
     try:
-        key = _get_setting(conn.cursor(), "embedding_model")
+        return _get_setting(conn.cursor(), key)
     finally:
         conn.close()
-    if key:
-        return key
 
-    from src.config import get_default_model_key
-    if count_documents() > 0:
-        key = DEFAULT_MODEL_KEY
-    else:
-        key = get_default_model_key()
-    set_active_model_key(key)
-    return key
-
-def set_active_model_key(key: str):
-    """Persists the active embedding model key."""
+def set_setting(key: str, value: str):
+    """Writes a settings value."""
     conn = get_db_connection()
     try:
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('embedding_model', ?)",
-            (key,)
-        )
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
         conn.commit()
     finally:
         conn.close()
+
+def get_active_model_key() -> str:
+    """Returns the active embedding model: the user's explicit choice if they
+    made one, otherwise the locale-aware default (the Korean model on a Korean
+    system). Not persisted, so the default is re-evaluated each run until the
+    user explicitly picks a model."""
+    from src.config import get_default_model_key
+    if get_setting("model_user_set") == "1":
+        saved = get_setting("embedding_model")
+        if saved:
+            return saved
+    return get_default_model_key()
+
+def set_active_model_key(key: str, user_set: bool = False):
+    """Persists the active embedding model key. user_set=True marks it as an
+    explicit user choice (which then overrides the locale default)."""
+    set_setting("embedding_model", key)
+    if user_set:
+        set_setting("model_user_set", "1")
+
+def get_index_model():
+    """Returns the model the current index was built with, or None if unknown."""
+    return get_setting("index_model")
+
+def set_index_model(key: str):
+    """Records the model the current index is built with."""
+    set_setting("index_model", key)
 
 def clear_index(new_dim: int):
     """Wipes all documents/chunks/embeddings and recreates the vec table.
