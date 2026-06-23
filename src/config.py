@@ -128,6 +128,16 @@ MAX_CHUNKS_PER_DOC = 50000
 # bounded for chunks up to CHUNK_SIZE.
 EMBED_BATCH_SIZE = 32
 
+# ONNX Runtime resource caps for the embedding session. The default lets ORT use
+# every CPU core (intra-op threads = core count) and pre-allocate a large memory
+# arena, so background indexing can peg ~50% CPU and hold gigabytes. Indexing is
+# a background task, so we cap the intra-op threads and disable the CPU arena to
+# keep CPU and resident memory modest. Scale the thread count with the machine
+# (about a quarter of the logical cores, at least one): one thread alone makes
+# large-document indexing painfully slow, while all cores is what we are avoiding.
+EMBED_INTRA_OP_THREADS = max(1, (os.cpu_count() or 4) // 4)
+EMBED_ENABLE_CPU_MEM_ARENA = False
+
 # Watcher settings
 DEBOUNCE_DELAY_SEC = 1.0
 

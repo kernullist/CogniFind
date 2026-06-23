@@ -5,7 +5,10 @@ import onnxruntime as ort
 import requests
 from tokenizers import Tokenizer
 from huggingface_hub import hf_hub_download, hf_hub_url, get_hf_file_metadata
-from src.config import MODEL_DIR, BUNDLED_MODELS_DIR, ALLOW_MODEL_DOWNLOAD, DEFAULT_MODEL_KEY, get_model_config
+from src.config import (
+    MODEL_DIR, BUNDLED_MODELS_DIR, ALLOW_MODEL_DOWNLOAD, DEFAULT_MODEL_KEY, get_model_config,
+    EMBED_INTRA_OP_THREADS, EMBED_ENABLE_CPU_MEM_ARENA,
+)
 
 
 def _download_with_progress(repo: str, filename: str, dest_path, progress_cb):
@@ -58,8 +61,20 @@ class EmbeddingEngine:
 
         self.model_path, self.tokenizer_path = self._ensure_model_files()
 
-        # Load the ONNX model session
-        self.session = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'])
+        # Load the ONNX model session with capped CPU/memory use. Indexing runs
+        # in the background, so we limit ORT to a small intra-op thread count
+        # (the default uses every core) and disable the CPU memory arena to keep
+        # the resident footprint down. ORT_SEQUENTIAL avoids a second op thread.
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = EMBED_INTRA_OP_THREADS
+        sess_options.inter_op_num_threads = 1
+        sess_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        sess_options.enable_cpu_mem_arena = EMBED_ENABLE_CPU_MEM_ARENA
+        self.session = ort.InferenceSession(
+            self.model_path,
+            sess_options=sess_options,
+            providers=['CPUExecutionProvider'],
+        )
 
         # Load the tokenizer
         self.tokenizer = Tokenizer.from_file(self.tokenizer_path)

@@ -253,49 +253,47 @@ class IndexingWorker(QThread):
             if old is None or old[1] != h:
                 to_embed.append(idx)
 
-        # 4. Embed only the changed chunks, OUTSIDE any DB transaction. Embedding
-        #    is slow and throttled; holding the write lock across it would starve
-        #    concurrent writers and block WAL checkpoints.
-        new_embeddings = {}
+        # 4-5. Embed the changed chunks and STREAM them to the DB in batches, so
+        #    a huge document never holds tens of thousands of embeddings in memory
+        #    at once (the dominant memory cost when indexing e.g. the Intel SDM).
+        #    The document's content_hash is written only after every chunk is
+        #    persisted, so an interrupted index leaves the document marked stale
+        #    (hash NULL) and is simply resumed on the next scan rather than left
+        #    half-done. Embedding happens between transactions, never inside one,
+        #    so the slow/throttled work does not hold the write lock.
+        changed = set(to_embed)
+        conn = get_db_connection()
         try:
+            # Create/refresh the document row but mark its content as NOT current
+            # (content_hash=None), and drop chunks that were removed or changed.
+            with conn:
+                upsert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified, None)
+                remove_ids = [
+                    cid for idx, (cid, _h) in existing_chunks.items()
+                    if idx >= len(chunks) or idx in changed
+                ]
+                delete_chunks(conn, remove_ids)
+
             # Embed in batches: one padded ONNX inference per batch is far faster
             # than one call per chunk, and the throttle is paid per batch rather
-            # than per chunk (decisive for large docs with tens of thousands of
-            # chunks). Interruption is still checked at every batch boundary.
+            # than per chunk (decisive for large docs). Each batch is persisted in
+            # its own short transaction. Interruption is checked at every batch.
             for start in range(0, len(to_embed), EMBED_BATCH_SIZE):
                 self.throttle_cpu()
                 if not self.is_running:
                     raise InterruptedError("Indexing worker was stopped by user.")
                 batch_idx = to_embed[start:start + EMBED_BATCH_SIZE]
                 batch_vecs = self.embedding_engine.get_embeddings([chunks[i] for i in batch_idx])
-                for i, vec in zip(batch_idx, batch_vecs):
-                    new_embeddings[i] = vec
-        except InterruptedError:
-            print(f"Indexing interrupted for {filepath_str}. Nothing written.")
-            return
-        except Exception as e:
-            print(f"Error embedding {filepath_str}: {e}")
-            return
+                with conn:
+                    for i, vec in zip(batch_idx, batch_vecs):
+                        chunk_id = insert_chunk(conn, doc_id, i, chunks[i], chunk_hashes[i])
+                        insert_embedding(conn, chunk_id, vec)
 
-        # 5. Apply the diff in a single atomic transaction. Unchanged chunks are
-        #    left untouched (their embeddings are reused).
-        conn = get_db_connection()
-        try:
+            # All chunks persisted -> mark the document's content as current.
             with conn:
                 upsert_document(conn, filepath_str, path.name, path.suffix, file_size, last_modified, content_hash)
-
-                # Remove chunks that were dropped (index beyond new length) or
-                # changed (they will be re-inserted below).
-                remove_ids = [
-                    cid for idx, (cid, _h) in existing_chunks.items()
-                    if idx >= len(chunks) or idx in new_embeddings
-                ]
-                delete_chunks(conn, remove_ids)
-
-                # Insert the new/changed chunks and their embeddings.
-                for idx in to_embed:
-                    chunk_id = insert_chunk(conn, doc_id, idx, chunks[idx], chunk_hashes[idx])
-                    insert_embedding(conn, chunk_id, new_embeddings[idx])
+        except InterruptedError:
+            print(f"Indexing interrupted for {filepath_str}. Will resume on next scan.")
         except Exception as e:
             print(f"Error indexing {filepath_str}: {e}")
         finally:
