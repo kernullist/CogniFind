@@ -1,10 +1,10 @@
 [package]
 name = "cognifind"
 version = "0.1.5"
-description = "ContextFinder - Local Semantic Document Search"
-authors = ["you"]
-license = ""
-repository = ""
+description = "CogniFind - Local Semantic Document Search"
+authors = ["kernullist"]
+license = "AGPL-3.0-only"
+repository = "https://github.com/kernullist/CogniFind"
 edition = "2021"
 rust-version = "1.77.2"
 

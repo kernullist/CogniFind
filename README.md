@@ -286,4 +286,27 @@ The Python backend exposes a REST API on `http://localhost:8765`:
 
 ## License
 
-This project is provided as-is for educational and personal use.
+CogniFind is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [LICENSE](LICENSE) for the full text.
+
+In short: you are free to use, study, modify, and redistribute it, but if you distribute the software or run a modified version as a network service, you must make the corresponding source code available under the same license.
+
+```
+Copyright (C) 2026 kernullist
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. This program is distributed WITHOUT ANY WARRANTY; without even
+the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU Affero General Public License for more details.
+```
+
+### Third-party components
+
+CogniFind bundles and builds on the following, each under its own license:
+
+- **PyMuPDF** (PDF text extraction / OCR rendering) — AGPL-3.0; the project's AGPL license follows from this dependency.
+- **PySide6** — LGPL-3.0.
+- **ONNX Runtime**, **python-docx**, **openpyxl**, **sqlite-vec** — MIT.
+- **tokenizers**, **huggingface_hub**, **rapidocr-onnxruntime**, **Tauri**, **React** — Apache-2.0 / MIT.
+- Embedding models: **sentence-transformers/all-MiniLM-L6-v2** (Apache-2.0) and **intfloat/multilingual-e5-small** via Xenova (MIT).
