@@ -21,6 +21,38 @@ if getattr(sys, "frozen", False):
 import asyncio
 from contextlib import asynccontextmanager
 from threading import Thread, Lock
+
+
+def _start_parent_watchdog():
+    # If CogniFind (the parent) dies for any reason -- including a crash or a
+    # Task Manager kill that bypasses the normal shutdown path -- terminate this
+    # backend so no orphaned process keeps holding port 8765. The parent PID is
+    # passed via COGNIFIND_PARENT_PID. Windows-only; a no-op elsewhere.
+    pid_str = os.environ.get("COGNIFIND_PARENT_PID")
+    if not pid_str or sys.platform != "win32":
+        return
+    try:
+        ppid = int(pid_str)
+    except ValueError:
+        return
+
+    import ctypes
+    SYNCHRONIZE = 0x00100000
+    INFINITE = 0xFFFFFFFF
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, ppid)
+    if not handle:
+        # Could not open the parent (already gone or access denied). Do not
+        # self-kill on a transient open failure right at startup.
+        return
+
+    def _wait():
+        # Blocks until the parent process exits, then exits immediately.
+        kernel32.WaitForSingleObject(handle, INFINITE)
+        os._exit(0)
+
+    Thread(target=_wait, daemon=True).start()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -373,4 +405,5 @@ def open_file(path: str):
 
 if __name__ == "__main__":
     import uvicorn
+    _start_parent_watchdog()
     uvicorn.run(app, host="127.0.0.1", port=8765)

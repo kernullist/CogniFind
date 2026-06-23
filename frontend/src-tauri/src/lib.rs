@@ -93,6 +93,10 @@ fn start_backend_sidecar(app: &tauri::AppHandle, state: &AppState) {
 
     match child_result {
         Ok(cmd) => {
+            // Pass our PID so the backend can self-terminate if this process dies
+            // unexpectedly (crash / Task Manager kill) without going through the
+            // normal stop path -- otherwise the onefile child would orphan.
+            let cmd = cmd.env("COGNIFIND_PARENT_PID", std::process::id().to_string());
             match cmd.spawn() {
                 Ok((_rx, child)) => {
                     log::info!("Python backend sidecar started");
@@ -154,13 +158,40 @@ fn start_backend_local_python(state: &AppState) {
     }
 }
 
+// Terminate a process and its whole tree. The backend is a PyInstaller onefile
+// exe: its bootloader parent extracts to a temp dir and spawns the real Python
+// (uvicorn) child. Killing only the direct child leaves that uvicorn process
+// orphaned, still holding port 8765 -- so we must kill the entire tree.
+#[cfg(windows)]
+fn kill_process_tree(pid: u32)
+{
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW: do not flash a console window from this windowed app.
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(windows))]
+fn kill_process_tree(_pid: u32)
+{
+}
+
 fn stop_backend_sidecar(state: &AppState) {
     if let Some(child) = state.backend_child.lock().unwrap().take() {
-        log::info!("Stopping Python backend sidecar");
+        let pid = child.pid();
+        log::info!("Stopping Python backend sidecar (pid {})", pid);
+        // Tree-kill first so the orphaned onefile child dies too, then reap the
+        // direct child handle (no-op if already gone).
+        kill_process_tree(pid);
         let _ = child.kill();
     }
     if let Some(mut child) = state.backend_local.lock().unwrap().take() {
-        log::info!("Stopping local python backend");
+        let pid = child.id();
+        log::info!("Stopping local python backend (pid {})", pid);
+        kill_process_tree(pid);
         let _ = child.kill();
     }
 }
@@ -247,6 +278,10 @@ pub fn run() {
                 .icon(tray_icon)
                 .tooltip("CogniFind - Local Semantic Search")
                 .menu(&menu)
+                // Left-click toggles the window (Spotlight style); the context
+                // menu is reserved for right-click, so do not also pop it on a
+                // left-click.
+                .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => {
                         let state = app.state::<AppState>();
@@ -269,7 +304,16 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                    // Only a left-button release toggles the window. Reacting to
+                    // every click (including right-click) would also focus the
+                    // window on right-click, stealing focus and instantly
+                    // dismissing the context menu.
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
                         if let Some(window) = tray.app_handle().get_webview_window("main") {
                             toggle_window(&window);
                         }
