@@ -1,5 +1,9 @@
 # CogniFind
 
+<p align="center">
+  <img src="screenshot01.png" alt="CogniFind surfacing the Intel Software Developer's Manual from a natural-language search for &quot;enclave&quot;" width="700">
+</p>
+
 CogniFind is a 100% offline, on-device local semantic document search utility for Windows. It runs in the system tray, monitors designated directories in real-time, and allows you to instantly search through file contents using natural language queries via a Spotlight-style popup window.
 
 ---
