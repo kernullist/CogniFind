@@ -68,6 +68,16 @@ DEFAULT_MODEL_KEY = "minilm"
 # short/acronym/exact-term queries (e.g. "dma") where pure dense search is weak.
 HYBRID_KEYWORD_WEIGHT = 0.3
 
+# Lexical recall: dense (vector) ranking has weak discrimination, so a document
+# that literally contains a distinctive query term can fall outside the dense
+# top-k and never surface. For such terms we pull their documents into the
+# candidate set directly. Only terms appearing in at most this fraction of the
+# corpus are treated as distinctive (near-ubiquitous terms are skipped -- they
+# are already well represented and would add noise/cost). At most this many
+# documents are recalled per distinctive term.
+HYBRID_RECALL_DF_RATIO = 0.5
+HYBRID_RECALL_LIMIT = 50
+
 # Hard upper bound on the k value in a sqlite-vec KNN query. vec0 rejects any
 # larger k with "k value in knn query too large" (the built-in limit is 4096).
 # Metadata-filtered searches must clamp their candidate pool to this.
@@ -105,9 +115,18 @@ def get_default_model_key() -> str:
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 # Cap chunks per document so a single huge file (e.g. a multi-MB log/export)
-# cannot monopolize the indexer for a very long time. ~2000 chunks covers the
-# first ~900KB of text, which is plenty for a document to be findable.
-MAX_CHUNKS_PER_DOC = 2000
+# cannot monopolize the indexer indefinitely. Set high enough to fully cover
+# large technical references (e.g. the ~5000-page Intel SDM, whose late chapters
+# such as SGX/enclave would be truncated by a smaller cap). ~50000 chunks covers
+# roughly the first 22 MB of extracted text.
+MAX_CHUNKS_PER_DOC = 50000
+
+# Number of chunks embedded per ONNX inference call during indexing. Batching is
+# far faster than one call per chunk (a single padded inference vs thousands) and
+# also amortizes the per-batch CPU throttle, which matters a lot for large docs
+# (e.g. the ~29000-chunk Intel SDM). Kept modest so batch padding/memory stays
+# bounded for chunks up to CHUNK_SIZE.
+EMBED_BATCH_SIZE = 32
 
 # Watcher settings
 DEBOUNCE_DELAY_SEC = 1.0
@@ -140,8 +159,9 @@ def is_ignored_path(path_str: str) -> bool:
     parts = path_str.replace("\\", "/").lower().split("/")
     return any(part in IGNORED_DIR_NAMES for part in parts)
 
-# Maximum file size to index (10 MB)
-MAX_FILE_SIZE_MB = 10
+# Maximum file size to index (50 MB). Large enough for big technical reference
+# PDFs such as the combined Intel SDM (~27 MB); files above this are skipped.
+MAX_FILE_SIZE_MB = 50
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 def get_default_watch_dirs():

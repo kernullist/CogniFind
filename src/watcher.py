@@ -18,6 +18,7 @@ from src.config import (
     THROTTLE_IDLE_THRESHOLD_SEC,
     THROTTLE_ACTIVE_SEC,
     THROTTLE_IDLE_SEC,
+    EMBED_BATCH_SIZE,
 )
 from src.database import (
     get_db_connection,
@@ -257,11 +258,18 @@ class IndexingWorker(QThread):
         #    concurrent writers and block WAL checkpoints.
         new_embeddings = {}
         try:
-            for idx in to_embed:
+            # Embed in batches: one padded ONNX inference per batch is far faster
+            # than one call per chunk, and the throttle is paid per batch rather
+            # than per chunk (decisive for large docs with tens of thousands of
+            # chunks). Interruption is still checked at every batch boundary.
+            for start in range(0, len(to_embed), EMBED_BATCH_SIZE):
                 self.throttle_cpu()
                 if not self.is_running:
                     raise InterruptedError("Indexing worker was stopped by user.")
-                new_embeddings[idx] = self.embedding_engine.get_embedding(chunks[idx])
+                batch_idx = to_embed[start:start + EMBED_BATCH_SIZE]
+                batch_vecs = self.embedding_engine.get_embeddings([chunks[i] for i in batch_idx])
+                for i, vec in zip(batch_idx, batch_vecs):
+                    new_embeddings[i] = vec
         except InterruptedError:
             print(f"Indexing interrupted for {filepath_str}. Nothing written.")
             return

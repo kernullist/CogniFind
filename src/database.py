@@ -2,9 +2,13 @@ import sqlite3
 import sqlite_vec
 import hashlib
 import json
+import math
 from pathlib import Path
 from datetime import datetime
-from src.config import DB_PATH, DEFAULT_MODEL_KEY, get_model_config, HYBRID_KEYWORD_WEIGHT, VEC_MAX_K
+from src.config import (
+    DB_PATH, DEFAULT_MODEL_KEY, get_model_config, HYBRID_KEYWORD_WEIGHT, VEC_MAX_K,
+    HYBRID_RECALL_DF_RATIO, HYBRID_RECALL_LIMIT,
+)
 
 def hash_text(text: str) -> str:
     """Returns the SHA-256 hex digest of a text string (used for change detection)."""
@@ -388,17 +392,22 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
     """
     params = [serialized_query, k]
 
+    # Build the metadata filter once; it is reused by the lexical-recall query.
+    filter_sql = ""
+    filter_params = []
     if file_extensions:
         exts_placeholders = ",".join("?" for _ in file_extensions)
-        sql += f" AND d.file_extension IN ({exts_placeholders})"
-        params.extend([ext.lower() for ext in file_extensions])
+        filter_sql += f" AND d.file_extension IN ({exts_placeholders})"
+        filter_params.extend([ext.lower() for ext in file_extensions])
     if date_from:
-        sql += " AND d.last_modified >= ?"
-        params.append(date_from)
+        filter_sql += " AND d.last_modified >= ?"
+        filter_params.append(date_from)
     if date_to:
-        sql += " AND d.last_modified <= ?"
-        params.append(date_to)
+        filter_sql += " AND d.last_modified <= ?"
+        filter_params.append(date_to)
 
+    sql += filter_sql
+    params.extend(filter_params)
     sql += " ORDER BY ce.distance ASC"
     cursor.execute(sql, params)
 
@@ -420,9 +429,70 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
                 'lexical': 0.0,
             }
 
-    # Lexical scoring over the candidate documents. A term found in the file name
-    # counts full; in the content, partial. lexical = weighted fraction of terms.
+    # Per-term inverse document frequency (IDF) + lexical recall. Computed up
+    # front because both the recall stage and the scoring stage need the IDF.
     terms = _query_terms(query_text)
+    idf = {}
+    if terms:
+        total_docs = cursor.execute("SELECT COUNT(*) FROM documents").fetchone()[0] or 1
+        for term in terms:
+            # Corpus document frequency -> smoothed IDF (always > 0). Rare terms
+            # get a much larger weight than common ones.
+            df = cursor.execute(
+                "SELECT COUNT(DISTINCT document_id) FROM document_chunks "
+                "WHERE lower(text_content) LIKE ?",
+                [f"%{term}%"],
+            ).fetchone()[0]
+            idf[term] = math.log((total_docs + 1) / (df + 1)) + 1.0
+
+            # Lexical recall: for a DISTINCTIVE term (not near-ubiquitous), pull
+            # in documents that literally contain it but whose chunks missed the
+            # dense top-k. The embedding model has weak discrimination, so a
+            # keyword like "enclave" can rank low and never surface otherwise.
+            # vec_distance_cosine ranks each matching chunk so we can keep the
+            # best one per document. Near-ubiquitous terms are skipped (already
+            # well represented; scanning them adds cost and noise).
+            if 0 < df <= total_docs * HYBRID_RECALL_DF_RATIO:
+                lex_sql = f"""
+                    SELECT
+                        d.id AS doc_id,
+                        d.file_path,
+                        d.file_name,
+                        d.file_extension,
+                        d.file_size,
+                        d.last_modified,
+                        c.text_content,
+                        c.chunk_index,
+                        (1.0 - vec_distance_cosine(ce.embedding, ?)) AS similarity
+                    FROM document_chunks c
+                    JOIN chunk_embeddings ce ON ce.chunk_id = c.id
+                    JOIN documents d ON c.document_id = d.id
+                    WHERE lower(c.text_content) LIKE ?{filter_sql}
+                    ORDER BY similarity DESC
+                    LIMIT ?
+                """
+                lex_params = [serialized_query, f"%{term}%"] + filter_params + [HYBRID_RECALL_LIMIT]
+                for row in cursor.execute(lex_sql, lex_params).fetchall():
+                    path = row['file_path']
+                    if path not in cand:
+                        cand[path] = {
+                            'doc_id': row['doc_id'],
+                            'file_path': path,
+                            'file_name': row['file_name'],
+                            'file_extension': row['file_extension'],
+                            'file_size': row['file_size'],
+                            'last_modified': row['last_modified'],
+                            'text_content': row['text_content'],
+                            'chunk_index': row['chunk_index'],
+                            'semantic': row['similarity'],
+                            'lexical': 0.0,
+                        }
+
+    # IDF-weighted lexical scoring over the full candidate set. A rare term
+    # (e.g. "enclave") must dominate a common one (e.g. "branch"); otherwise a
+    # high-semantic doc that merely contains the common term outranks the doc
+    # that actually contains the distinctive term the user typed. A filename
+    # match counts full weight; a content match partial.
     if terms and cand:
         doc_ids = [c['doc_id'] for c in cand.values()]
         ph = ",".join("?" for _ in doc_ids)
@@ -435,16 +505,18 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
             ).fetchall()
             for r in rows:
                 content_hits.setdefault(r[0], set()).add(term)
+        idf_total = sum(idf.values()) or 1.0
         for c in cand.values():
             fn = c['file_name'].lower()
             chits = content_hits.get(c['doc_id'], set())
             score = 0.0
             for t in terms:
                 if t in fn:
-                    score += 1.0
+                    score += idf[t] * 1.0
                 elif t in chits:
-                    score += 0.7
-            c['lexical'] = score / len(terms)
+                    score += idf[t] * 0.7
+            # Normalize by total IDF so lexical stays in [0, 1].
+            c['lexical'] = score / idf_total
 
     conn.close()
 
