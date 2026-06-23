@@ -39,11 +39,20 @@ if (-not (Test-Path $PORTABLE_DIR)) {
 }
 
 # 3. Zip the portable package for distribution.
+#    Use bsdtar (tar.exe, built into Windows 10/11) rather than Compress-Archive:
+#    the latter silently corrupts large entries (the ~450 MB model.onnx came out
+#    with a bad CRC, failing extraction). bsdtar/libarchive writes a valid Zip64
+#    archive. "-a" picks the zip format from the .zip suffix; "-C dir ." archives
+#    the directory contents at the archive root (matching the old layout).
 $ZIP = Join-Path $ROOT "dist\CogniFind-v$version.zip"
 if (Test-Path $ZIP) {
     Remove-Item $ZIP -Force
 }
-Compress-Archive -Path (Join-Path $PORTABLE_DIR "*") -DestinationPath $ZIP
+tar.exe -a -c -f $ZIP -C $PORTABLE_DIR .
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: failed to create the release zip with tar." -ForegroundColor Red
+    exit 1
+}
 
 $sizeMB = [math]::Round((Get-Item $ZIP).Length / 1MB, 1)
 Write-Host ""
