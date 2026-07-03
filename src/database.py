@@ -20,6 +20,9 @@ def get_db_connection():
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
     conn.execute("PRAGMA foreign_keys = ON;")
+    # Required so the FTS-sync delete trigger on document_chunks also fires for
+    # rows removed by the documents -> chunks ON DELETE CASCADE.
+    conn.execute("PRAGMA recursive_triggers = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA busy_timeout = 5000;")
     conn.row_factory = sqlite3.Row
@@ -43,6 +46,65 @@ def _ensure_column(cursor, table: str, column: str, decl: str):
     existing = {row[1] for row in cursor.fetchall()}
     if column not in existing:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+# Whether the trigram FTS index is available. Set by init_db; when False (very
+# old SQLite without FTS5/trigram), lexical lookups fall back to raw LIKE scans.
+_fts_enabled = False
+
+def _ensure_fts(cursor) -> bool:
+    """Creates the trigram FTS5 index over chunk text plus its sync triggers,
+    and backfills it if it is out of sync (fresh upgrade or after a crash).
+
+    The trigram tokenizer lets FTS5 accelerate LIKE '%term%' substring queries
+    (patterns of 3+ chars), which preserves the exact matching semantics of the
+    previous full-table scans while dropping per-term cost from ~180 ms to
+    milliseconds. External content keeps the text stored once, in
+    document_chunks; triggers keep the index in sync on every insert/delete
+    (including cascaded deletes, thanks to PRAGMA recursive_triggers).
+    Returns False if the SQLite build lacks FTS5/trigram support.
+    """
+    try:
+        cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
+            text_content,
+            content='document_chunks',
+            content_rowid='id',
+            tokenize='trigram'
+        );
+        """)
+    except sqlite3.OperationalError as e:
+        print(f"FTS5 trigram index unavailable ({e}); lexical search will use table scans.")
+        return False
+
+    cursor.execute("""
+    CREATE TRIGGER IF NOT EXISTS chunk_fts_ai AFTER INSERT ON document_chunks BEGIN
+        INSERT INTO chunk_fts(rowid, text_content) VALUES (new.id, new.text_content);
+    END;
+    """)
+    cursor.execute("""
+    CREATE TRIGGER IF NOT EXISTS chunk_fts_ad AFTER DELETE ON document_chunks BEGIN
+        INSERT INTO chunk_fts(chunk_fts, rowid, text_content) VALUES ('delete', old.id, old.text_content);
+    END;
+    """)
+    cursor.execute("""
+    CREATE TRIGGER IF NOT EXISTS chunk_fts_au AFTER UPDATE ON document_chunks BEGIN
+        INSERT INTO chunk_fts(chunk_fts, rowid, text_content) VALUES ('delete', old.id, old.text_content);
+        INSERT INTO chunk_fts(rowid, text_content) VALUES (new.id, new.text_content);
+    END;
+    """)
+
+    # Backfill exactly once, on the first run after the upgrade. A row-count
+    # comparison cannot detect the empty index -- an external-content FTS table
+    # delegates COUNT(*) to the content table, so it always "matches". After
+    # this one rebuild the triggers keep the index in sync transactionally.
+    if _get_setting(cursor, "fts_built") != "1":
+        n_chunks = cursor.execute("SELECT COUNT(*) FROM document_chunks").fetchone()[0]
+        print(f"Building FTS index over {n_chunks} chunks (one-time)...")
+        cursor.execute("INSERT INTO chunk_fts(chunk_fts) VALUES ('rebuild')")
+        cursor.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('fts_built', '1')"
+        )
+    return True
 
 def init_db():
     conn = get_db_connection()
@@ -95,6 +157,11 @@ def init_db():
     #    (which may be the locale default, not the persisted embedding_model).
     active_key = _resolve_active_model(lambda k: _get_setting(cursor, k))
     _create_embeddings_table(cursor, get_model_config(active_key)["dim"])
+
+    # 5. Trigram FTS index over chunk text (accelerates the hybrid search's
+    #    lexical LIKE lookups; falls back to table scans if unsupported).
+    global _fts_enabled
+    _fts_enabled = _ensure_fts(cursor)
 
     conn.commit()
     conn.close()
@@ -340,6 +407,15 @@ def get_all_indexed_files() -> dict[str, dict]:
     conn.close()
     return results
 
+def _term_where(term: str) -> tuple[str, str]:
+    """Returns a (where_sql, param) pair matching chunks (aliased as c) whose
+    text contains `term` as a substring. Routed through the trigram FTS index
+    when available -- it only accelerates patterns of 3+ characters, so shorter
+    terms keep the raw LIKE scan (identical semantics, just slower)."""
+    if _fts_enabled and len(term) >= 3:
+        return "c.id IN (SELECT rowid FROM chunk_fts WHERE text_content LIKE ?)", f"%{term}%"
+    return "lower(c.text_content) LIKE ?", f"%{term}%"
+
 def _query_terms(text: str) -> list[str]:
     """Extracts distinct lexical terms (English/number runs and Korean syllable
     runs, length >= 2) from a query, capped to keep lexical scanning cheap."""
@@ -441,10 +517,10 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
     if terms:
         total_docs = cursor.execute("SELECT COUNT(*) FROM documents").fetchone()[0] or 1
         for term in terms:
+            where_sql, where_param = _term_where(term)
             rows = cursor.execute(
-                "SELECT DISTINCT document_id FROM document_chunks "
-                "WHERE lower(text_content) LIKE ?",
-                [f"%{term}%"],
+                f"SELECT DISTINCT c.document_id FROM document_chunks c WHERE {where_sql}",
+                [where_param],
             ).fetchall()
             term_docs[term] = {r[0] for r in rows}
             # Smoothed IDF (always > 0): rare terms get a much larger weight.
@@ -463,6 +539,7 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
                 # matching chunk (SQLite pairs the bare columns with MAX()), so
                 # the LIMIT counts documents -- a single huge document cannot
                 # occupy the whole recall budget with its many matching chunks.
+                where_sql, where_param = _term_where(term)
                 lex_sql = f"""
                     SELECT
                         d.id AS doc_id,
@@ -477,12 +554,12 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
                     FROM document_chunks c
                     JOIN chunk_embeddings ce ON ce.chunk_id = c.id
                     JOIN documents d ON c.document_id = d.id
-                    WHERE lower(c.text_content) LIKE ?{filter_sql}
+                    WHERE {where_sql}{filter_sql}
                     GROUP BY d.id
                     ORDER BY similarity DESC
                     LIMIT ?
                 """
-                lex_params = [serialized_query, f"%{term}%"] + filter_params + [HYBRID_RECALL_LIMIT]
+                lex_params = [serialized_query, where_param] + filter_params + [HYBRID_RECALL_LIMIT]
                 for row in cursor.execute(lex_sql, lex_params).fetchall():
                     path = row['file_path']
                     if path not in cand:
