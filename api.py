@@ -280,9 +280,13 @@ def get_status():
         documents = count_documents()
     except Exception:
         documents = 0
-    if worker is not None:
-        progress = worker.get_index_progress()
-        status = worker.current_status
+    # Snapshot the global: a settings/model change on another thread can set
+    # worker to None between the check and the method calls, which would raise
+    # and surface as an intermittent 500 on this poll endpoint.
+    w = worker
+    if w is not None:
+        progress = w.get_index_progress()
+        status = w.current_status
     else:
         progress = {"queued": 0, "scanning": False}
         status = worker_status

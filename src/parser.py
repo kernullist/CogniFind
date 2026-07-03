@@ -3,7 +3,7 @@ from pathlib import Path
 import pypdf
 import docx
 import openpyxl
-from src.config import MAX_CHUNKS_PER_DOC
+from src.config import MAX_CHUNKS_PER_DOC, CHUNK_SIZE, CHUNK_OVERLAP
 
 def clean_whitespace(text: str) -> str:
     """Replaces multiple whitespaces and newlines with single instances to clean text."""
@@ -162,7 +162,7 @@ def extract_text(filepath_str: str) -> str:
     else:
         raise ValueError(f"Unsupported file format: {ext}")
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
     """Splits cleaned text into chunks of specified size and overlap."""
     text = clean_whitespace(text)
     if not text:

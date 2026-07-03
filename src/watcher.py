@@ -178,18 +178,27 @@ class IndexingWorker(QThread):
                 path = Path(filepath_str)
                 stat = path.stat()
                 if stat.st_size > MAX_FILE_SIZE_BYTES:
+                    # If the file was indexed before it grew past the cap, drop
+                    # the stale entry instead of leaving old content searchable.
+                    if filepath_str in self.db_files:
+                        delete_document_by_path(filepath_str)
+                        del self.db_files[filepath_str]
                     continue
-                    
+
                 last_mod = datetime.fromtimestamp(stat.st_mtime).isoformat()
-                
+
                 if filepath_str not in self.db_files:
                     with self.lock:
                         if filepath_str not in self.queue:
                             self.queue.append(filepath_str)
                 else:
                     db_meta = self.db_files[filepath_str]
-                    if (db_meta['file_size'] != stat.st_size or 
-                            db_meta['last_modified'] != last_mod):
+                    # A NULL content_hash marks an interrupted (partial) index:
+                    # the metadata was already refreshed before the interruption,
+                    # so a size/mtime comparison alone would skip it forever.
+                    if (db_meta['file_size'] != stat.st_size or
+                            db_meta['last_modified'] != last_mod or
+                            db_meta.get('content_hash') is None):
                         with self.lock:
                             if filepath_str not in self.queue:
                                 self.queue.append(filepath_str)

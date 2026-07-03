@@ -103,7 +103,7 @@ function ResultItem({
           {ext}
         </span>
         <span className="filename">{item.file_name}</span>
-        <span className={`similarity ${simPct >= 80 ? "high" : simPct >= 60 ? "mid" : "low"}`}>
+        <span className={`similarity ${simPct >= 60 ? "high" : simPct >= 45 ? "mid" : "low"}`}>
           {simPct}% Match
         </span>
       </div>

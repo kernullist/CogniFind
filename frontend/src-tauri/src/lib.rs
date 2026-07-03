@@ -333,7 +333,7 @@ pub fn run() {
                 window
                     .app_handle()
                     .dialog()
-                    .message("CogniFind를 트레이로 보낼까요?\n'아니오'를 누르면 완전히 종료됩니다.")
+                    .message("Keep CogniFind running in the system tray?\nChoosing 'No' quits the app completely.")
                     .title("CogniFind")
                     .buttons(MessageDialogButtons::YesNo)
                     .show(move |send_to_tray| {

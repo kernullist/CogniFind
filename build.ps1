@@ -158,6 +158,8 @@ New-Item -ItemType Directory -Path $PORTABLE_DIR -Force | Out-Null
 
 Copy-Item $TAURI_EXE (Join-Path $PORTABLE_DIR "CogniFind.exe") -Force
 Copy-Item $PYEXE (Join-Path $PORTABLE_DIR "cognifind-backend.exe") -Force
+# AGPL-3.0 requires the license text to accompany binary distribution.
+Copy-Item (Join-Path $ROOT "LICENSE") (Join-Path $PORTABLE_DIR "LICENSE") -Force
 
 # Models live next to the exe so exe-only updates leave them untouched.
 Push-Location $ROOT

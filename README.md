@@ -13,7 +13,7 @@ CogniFind is a 100% offline, on-device local semantic document search utility fo
 - **Zero-Cloud Privacy**: All vector embeddings and SQLite databases are calculated and stored locally on your machine.
 - **Low-Resource Background Indexing**: Automatically monitors system idle state using the Windows API. When active user input (mouse/keyboard) is detected, background indexing throttles its CPU usage to keep the operating system highly responsive.
 - **Real-Time Watchdog**: Automatically detects file additions, modifications, renames, and deletions. Uses a debounced event queue to prevent redundant indexing during active file saves.
-- **Spotlight-Style Search Popup**: A borderless, semi-transparent dark-themed overlay that is activated via a global system hotkey (Ctrl + Alt + F) or by clicking the tray icon.
+- **Spotlight-Style Search Window**: A dark-themed, resizable search window that is toggled via a global system hotkey (Ctrl + Alt + F) or by clicking the tray icon.
 - **Supported Formats**: Parses and indexes Text/Markdown (.txt, .md), PDF (.pdf), Word (.docx), and Excel (.xlsx) files. Scanned/image PDFs (no text layer) are detected and logged; an optional OCR fallback can recover their text (see below).
 - **Hybrid Metadata Filtering**: Combines semantic vector similarity search with file metadata filters (file type, date range).
 - **Modern UI**: Built with Tauri + React + TypeScript for a fast, responsive user experience.
@@ -129,7 +129,8 @@ CogniFind/
 │   │   ├── Cargo.toml              # Rust dependencies
 │   │   └── tauri.conf.json         # Tauri configuration
 │   └── package.json                # Node.js dependencies
-└── main.py                         # Legacy PySide6 entry point (deprecated)
+├── release.ps1                     # Release packaging script (version bump + zip)
+└── LICENSE                         # AGPL-3.0
 ```
 
 ---
@@ -138,8 +139,8 @@ CogniFind/
 
 ### Production
 
-1. **Install the application** using the provided installer.
-2. **Launch CogniFind** from the Start Menu or desktop shortcut.
+1. **Download and extract** the portable zip from the GitHub Releases page.
+2. **Run `CogniFind.exe`** from the extracted folder.
 3. A magnifying glass icon will appear in your Windows system tray, and the background thread will begin scanning your watched directories.
 
 ### Development

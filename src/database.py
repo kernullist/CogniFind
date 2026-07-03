@@ -324,15 +324,18 @@ def count_documents() -> int:
         conn.close()
 
 def get_all_indexed_files() -> dict[str, dict]:
-    """Returns a dict mapping file_path to its modification time and size."""
+    """Returns a dict mapping file_path to its modification time, size, and
+    content_hash. content_hash is None for a document whose indexing was
+    interrupted mid-stream; the scanner uses that to resume it."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT file_path, last_modified, file_size FROM documents")
+    cursor.execute("SELECT file_path, last_modified, file_size, content_hash FROM documents")
     results = {}
     for row in cursor.fetchall():
         results[row['file_path']] = {
             'last_modified': row['last_modified'],
-            'file_size': row['file_size']
+            'file_size': row['file_size'],
+            'content_hash': row['content_hash'],
         }
     conn.close()
     return results
@@ -362,17 +365,14 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
         conn.close()
         return []
 
-    has_filters = bool(file_extensions or date_from or date_to)
-
-    # sqlite-vec KNN is brute-force, so k only bounds returned rows. Over-fetch a
-    # larger candidate pool than `limit` so lexical re-ranking can promote a
-    # keyword match that scored slightly lower semantically. With metadata
-    # filters (applied after the KNN) widen the pool toward the full set so the
-    # post-filter still has matches to return. vec0 caps k at VEC_MAX_K, so clamp
-    # to it -- a larger k raises "k value in knn query too large" and the search
-    # would return nothing (e.g. a Type=PDF filter over a large index).
-    k = total if has_filters else min(limit * 10, total)
-    k = min(k, VEC_MAX_K)
+    # sqlite-vec KNN is brute-force: every embedding is scanned regardless of k,
+    # which only bounds the returned rows. So always request the largest allowed
+    # pool (vec0 rejects k above VEC_MAX_K). A small k breaks candidate
+    # diversity once one huge document dominates the index -- e.g. with the
+    # ~29k-chunk Intel SDM holding 65% of all chunks, k=50 can be filled
+    # entirely by chunks of that single document, collapsing the result list to
+    # one file. A large pool also lets post-KNN metadata filters keep matches.
+    k = min(total, VEC_MAX_K)
 
     sql = """
         SELECT
@@ -431,18 +431,24 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
 
     # Per-term inverse document frequency (IDF) + lexical recall. Computed up
     # front because both the recall stage and the scoring stage need the IDF.
+    # One LIKE scan per term collects the full set of documents containing it,
+    # which serves the document frequency, the recall trigger, AND the scoring
+    # stage's containment checks -- avoiding a second per-term LIKE scan over
+    # the chunks table (the scans dominate search latency on large indexes).
     terms = _query_terms(query_text)
     idf = {}
+    term_docs = {}
     if terms:
         total_docs = cursor.execute("SELECT COUNT(*) FROM documents").fetchone()[0] or 1
         for term in terms:
-            # Corpus document frequency -> smoothed IDF (always > 0). Rare terms
-            # get a much larger weight than common ones.
-            df = cursor.execute(
-                "SELECT COUNT(DISTINCT document_id) FROM document_chunks "
+            rows = cursor.execute(
+                "SELECT DISTINCT document_id FROM document_chunks "
                 "WHERE lower(text_content) LIKE ?",
                 [f"%{term}%"],
-            ).fetchone()[0]
+            ).fetchall()
+            term_docs[term] = {r[0] for r in rows}
+            # Smoothed IDF (always > 0): rare terms get a much larger weight.
+            df = len(term_docs[term])
             idf[term] = math.log((total_docs + 1) / (df + 1)) + 1.0
 
             # Lexical recall: for a DISTINCTIVE term (not near-ubiquitous), pull
@@ -453,6 +459,10 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
             # best one per document. Near-ubiquitous terms are skipped (already
             # well represented; scanning them adds cost and noise).
             if 0 < df <= total_docs * HYBRID_RECALL_DF_RATIO:
+                # GROUP BY document keeps only each document's best-scoring
+                # matching chunk (SQLite pairs the bare columns with MAX()), so
+                # the LIMIT counts documents -- a single huge document cannot
+                # occupy the whole recall budget with its many matching chunks.
                 lex_sql = f"""
                     SELECT
                         d.id AS doc_id,
@@ -463,11 +473,12 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
                         d.last_modified,
                         c.text_content,
                         c.chunk_index,
-                        (1.0 - vec_distance_cosine(ce.embedding, ?)) AS similarity
+                        MAX(1.0 - vec_distance_cosine(ce.embedding, ?)) AS similarity
                     FROM document_chunks c
                     JOIN chunk_embeddings ce ON ce.chunk_id = c.id
                     JOIN documents d ON c.document_id = d.id
                     WHERE lower(c.text_content) LIKE ?{filter_sql}
+                    GROUP BY d.id
                     ORDER BY similarity DESC
                     LIMIT ?
                 """
@@ -492,28 +503,17 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
     # (e.g. "enclave") must dominate a common one (e.g. "branch"); otherwise a
     # high-semantic doc that merely contains the common term outranks the doc
     # that actually contains the distinctive term the user typed. A filename
-    # match counts full weight; a content match partial.
+    # match counts full weight; a content match partial. Containment checks use
+    # the term_docs sets already collected above (no extra DB scans).
     if terms and cand:
-        doc_ids = [c['doc_id'] for c in cand.values()]
-        ph = ",".join("?" for _ in doc_ids)
-        content_hits = {}
-        for term in terms:
-            rows = cursor.execute(
-                f"SELECT DISTINCT document_id FROM document_chunks "
-                f"WHERE document_id IN ({ph}) AND lower(text_content) LIKE ?",
-                doc_ids + [f"%{term}%"],
-            ).fetchall()
-            for r in rows:
-                content_hits.setdefault(r[0], set()).add(term)
         idf_total = sum(idf.values()) or 1.0
         for c in cand.values():
             fn = c['file_name'].lower()
-            chits = content_hits.get(c['doc_id'], set())
             score = 0.0
             for t in terms:
                 if t in fn:
                     score += idf[t] * 1.0
-                elif t in chits:
+                elif c['doc_id'] in term_docs[t]:
                     score += idf[t] * 0.7
             # Normalize by total IDF so lexical stays in [0, 1].
             c['lexical'] = score / idf_total
@@ -523,6 +523,11 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
     for c in cand.values():
         c['final'] = c['semantic'] + HYBRID_KEYWORD_WEIGHT * c['lexical']
 
+    # Normalize the displayed similarity by the maximum possible final score
+    # (semantic 1.0 + full lexical boost) instead of clamping at 1.0. Clamping
+    # saturated every keyword-boosted result at "100% Match", erasing the
+    # visible ranking; normalization preserves both the order and the spread.
+    max_final = 1.0 + HYBRID_KEYWORD_WEIGHT
     ranked = sorted(cand.values(), key=lambda c: c['final'], reverse=True)[:limit]
     return [{
         'file_path': c['file_path'],
@@ -532,7 +537,7 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
         'last_modified': c['last_modified'],
         'text_content': c['text_content'],
         'chunk_index': c['chunk_index'],
-        'similarity': min(1.0, c['final']),
+        'similarity': c['final'] / max_final,
     } for c in ranked]
 
 import re
