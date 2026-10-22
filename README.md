@@ -71,8 +71,8 @@ npm install
 ## How it Works
 
 1. **Pre-heating**: On startup, the Python backend loads the local embedding engine in a background thread (so the UI stays responsive and can show a download progress bar). It resolves model files in this order: the per-user cache (`~/.cognifind/models/`), then the models shipped next to the executable (`models/` in the portable folder, offline), and only then a download from the Hugging Face Hub if downloads are enabled. Production builds ship the models and run fully offline by default.
-2. **Directory Scanning**: Scans watched directories (configured in SQLite/settings or the in-app settings panel, defaulting to your Documents, Desktop, Downloads, and OneDrive folders). Build artifacts and dependency dirs (node_modules, .git, build, dist, target, etc.) are skipped. It deletes records of removed files and queues new or modified files.
-3. **Chunking & Embeddings**: Extracts text from documents, splits it into 500-character chunks with a 50-character overlap, converts them into 384-dimensional normalized vectors via ONNX Runtime, and saves them in the local database (~/.cognifind/contextfinder.db).
+2. **Directory Scanning**: Scans watched directories (configured in SQLite/settings or the in-app settings panel, defaulting to your Documents, Desktop, Downloads, and OneDrive folders). Build artifacts and dependency dirs (node_modules, .git, build, dist, target, etc.) below a watched folder are skipped. Nested or duplicate watched folders are collapsed so no file is scanned twice, and deleting a watched sub-folder removes its documents from the index immediately. It deletes records of removed files and queues new or modified files.
+3. **Chunking & Embeddings**: Extracts text from documents (PDFs via PyMuPDF, falling back to pypdf), splits it into 500-character chunks with a 50-character overlap, converts them into 384-dimensional normalized vectors via ONNX Runtime, and saves them in the local database (~/.cognifind/contextfinder.db).
 4. **Vector Searching**: When you type a query, it is embedded into a vector, and a K-Nearest Neighbors (KNN) search is executed on the sqlite-vec virtual table using cosine distance.
 
 ---
@@ -258,7 +258,9 @@ All data is stored in `~/.cognifind/`:
 
 ## API Reference
 
-The Python backend exposes a REST API on `http://localhost:8765`:
+The Python backend exposes a REST API on `http://127.0.0.1:8765`.
+
+Requests are accepted only with a loopback `Host` header (`127.0.0.1` / `localhost`, with or without `:8765`), which blocks DNS-rebinding attacks from web pages. Requests that carry an `Origin` header must come from the Tauri webview or the Vite dev server; requests without `Origin` (curl, the tray menu) are allowed.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -282,6 +284,16 @@ The Python backend exposes a REST API on `http://localhost:8765`:
   "limit": 5
 }
 ```
+
+---
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The tests use a temporary database and never touch `~/.cognifind`.
 
 ---
 

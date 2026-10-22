@@ -53,8 +53,9 @@ def _start_parent_watchdog():
 
     Thread(target=_wait, daemon=True).start()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from PySide6.QtCore import QThread
@@ -208,23 +209,66 @@ async def lifespan(app: FastAPI):
         _stop_indexing()
 
 
+API_HOST = "127.0.0.1"
+API_PORT = 8765
+
 app = FastAPI(title="CogniFind API", lifespan=lifespan)
 
 # Restrict CORS to the Tauri webview origins instead of "*":
-#   - http://localhost:5173      : Vite dev server (devUrl)
 #   - http://tauri.localhost     : Windows production webview
 #   - tauri://localhost          : other platforms' webview
+#   - http://localhost:5173      : Vite dev server (devUrl), dev only
+# The Vite origin is NOT trusted in the shipped app: 5173 is Vite's default
+# port, so any unrelated dev server the user runs would otherwise get full
+# read access to search results. It is allowed when running from source, or
+# when a debug Tauri build launches the frozen sidecar (COGNIFIND_DEV_ORIGIN=1).
+_PROD_ORIGINS = {
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+}
+_DEV_ORIGIN = "http://localhost:5173"
+
+
+def compute_allowed_origins(frozen: bool, env) -> frozenset:
+    allow_dev = (not frozen) or env.get("COGNIFIND_DEV_ORIGIN") == "1"
+    return frozenset(_PROD_ORIGINS | ({_DEV_ORIGIN} if allow_dev else set()))
+
+
+ALLOWED_ORIGINS = compute_allowed_origins(getattr(sys, "frozen", False), os.environ)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://tauri.localhost",
-        "https://tauri.localhost",
-        "tauri://localhost",
-    ],
+    allow_origins=sorted(ALLOWED_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Host header allowlist. Binding to loopback is not enough: a web page can
+# DNS-rebind its own hostname to 127.0.0.1 and then talk to this server as a
+# same-origin peer, which bypasses CORS entirely and would let it read search
+# results (document text). Browsers always send the attacker's hostname in
+# Host, so rejecting unknown hosts closes that hole.
+ALLOWED_HOSTS = frozenset({
+    f"{API_HOST}:{API_PORT}", f"localhost:{API_PORT}", API_HOST, "localhost",
+})
+
+
+# Registered after CORSMiddleware, so it wraps it and runs first.
+@app.middleware("http")
+async def local_only_guard(request: Request, call_next):
+    host = (request.headers.get("host") or "").lower()
+    if host not in ALLOWED_HOSTS:
+        print(f"Rejected request with Host '{host}'")
+        return JSONResponse(status_code=421, content={"detail": "Invalid Host header"})
+    # CORS only hides responses; "simple" cross-site requests (e.g. a form POST
+    # to /api/open-file) are still delivered and executed. Browsers attach
+    # Origin to every cross-origin POST/PUT, so refuse foreign origins outright.
+    # Requests without Origin (tray reqwest, curl, same-origin GET) pass.
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in ALLOWED_ORIGINS:
+        print(f"Rejected request from Origin '{origin}'")
+        return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
+    return await call_next(request)
 
 
 class SearchRequest(BaseModel):
@@ -302,7 +346,7 @@ def get_status():
 
 
 @app.get("/api/settings")
-async def get_settings():
+def get_settings():
     dirs = get_monitored_dirs()
     return {"monitored_dirs": dirs}
 
@@ -315,22 +359,23 @@ def update_settings(req: SettingsRequest):
         raise HTTPException(status_code=503, detail="Embedding model is still loading")
 
     with worker_lock:
-        save_monitored_dirs(req.monitored_dirs)
+        # Stored form: normalized, duplicates and nested folders removed.
+        dirs = save_monitored_dirs(req.monitored_dirs)
         _stop_indexing()
 
         # Drop documents that are no longer under any monitored folder, so
         # removing a folder also removes its documents from search.
-        purged = purge_documents_outside(req.monitored_dirs)
+        purged = purge_documents_outside(dirs)
         if purged:
             print(f"Removed {purged} documents from de-selected folders.")
 
-        _start_indexing(embedding_engine, req.monitored_dirs)
+        _start_indexing(embedding_engine, dirs)
 
-    return {"monitored_dirs": req.monitored_dirs}
+    return {"monitored_dirs": dirs}
 
 
 @app.get("/api/model")
-async def get_model():
+def get_model():
     return {
         "active": get_active_model_key(),
         "available": [
@@ -386,16 +431,19 @@ def set_model(req: ModelRequest):
 
 
 @app.post("/api/index/scan")
-async def trigger_rescan():
-    if worker:
-        worker.scan_and_sync()
+def trigger_rescan():
+    # Snapshot: a settings/model change may swap the worker concurrently.
+    w = worker
+    if w is not None:
+        w.scan_and_sync()
     return {"ok": True}
 
 
 @app.post("/api/open-file")
 def open_file(path: str):
-    # Only launch files we actually indexed. CORS is open, so without this any
-    # local origin could trigger os.startfile on an arbitrary path.
+    # Only launch files we actually indexed, so a caller that gets past the
+    # Host/Origin guard (e.g. another local process) cannot os.startfile an
+    # arbitrary path such as an executable.
     if not is_document_indexed(path):
         raise HTTPException(status_code=403, detail="Path is not an indexed document")
     if not os.path.exists(path):
@@ -410,4 +458,4 @@ def open_file(path: str):
 if __name__ == "__main__":
     import uvicorn
     _start_parent_watchdog()
-    uvicorn.run(app, host="127.0.0.1", port=8765)
+    uvicorn.run(app, host=API_HOST, port=API_PORT)

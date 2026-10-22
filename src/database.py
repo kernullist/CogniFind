@@ -3,6 +3,7 @@ import sqlite_vec
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 from datetime import datetime
 from src.config import (
@@ -310,14 +311,25 @@ def insert_chunk(conn, doc_id: str, chunk_index: int, text_content: str, chunk_h
     """, (doc_id, chunk_index, text_content, chunk_hash))
     return cursor.lastrowid
 
+# Max ids bound into one IN (...) list. SQLite caps bound variables per
+# statement (32766 on modern builds, 999 on old ones) while a document may hold
+# up to MAX_CHUNKS_PER_DOC (50000) chunks, so ids are always deleted in batches.
+_ID_BATCH = 500
+
+def _delete_ids(cursor, table: str, column: str, ids: list[int]):
+    """Deletes rows whose `column` is in ids, in fixed-size batches."""
+    for start in range(0, len(ids), _ID_BATCH):
+        batch = ids[start:start + _ID_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+        cursor.execute(f"DELETE FROM {table} WHERE {column} IN ({placeholders})", batch)
+
 def delete_chunks(conn, chunk_ids: list[int]):
     """Deletes specific chunks and their embeddings from the vector table."""
     if not chunk_ids:
         return
     cursor = conn.cursor()
-    placeholders = ",".join("?" for _ in chunk_ids)
-    cursor.execute(f"DELETE FROM chunk_embeddings WHERE chunk_id IN ({placeholders})", chunk_ids)
-    cursor.execute(f"DELETE FROM document_chunks WHERE id IN ({placeholders})", chunk_ids)
+    _delete_ids(cursor, "chunk_embeddings", "chunk_id", chunk_ids)
+    _delete_ids(cursor, "document_chunks", "id", chunk_ids)
 
 def insert_embedding(conn, chunk_id: int, embedding: list[float]):
     """Inserts an embedding vector into the virtual vector table."""
@@ -328,23 +340,55 @@ def insert_embedding(conn, chunk_id: int, embedding: list[float]):
         VALUES (?, ?)
     """, (chunk_id, serialized))
 
+def _delete_document_by_id(cursor, doc_id: str):
+    """Deletes one document's embeddings, then the document (chunks cascade)."""
+    cursor.execute("SELECT id FROM document_chunks WHERE document_id = ?", (doc_id,))
+    chunk_ids = [row[0] for row in cursor.fetchall()]
+    _delete_ids(cursor, "chunk_embeddings", "chunk_id", chunk_ids)
+    cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+
 def delete_document_by_path(file_path: str):
     """Deletes a document and all associated chunks and embeddings using cascading delete."""
     doc_id = get_file_hash_id(file_path)
     conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT id FROM document_chunks WHERE document_id = ?", (doc_id,))
-    chunk_ids = [row[0] for row in cursor.fetchall()]
-    
-    if chunk_ids:
-        placeholders = ",".join("?" for _ in chunk_ids)
-        cursor.execute(f"DELETE FROM chunk_embeddings WHERE chunk_id IN ({placeholders})", chunk_ids)
-        
-    cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-    
-    conn.commit()
-    conn.close()
+    try:
+        with conn:
+            _delete_document_by_id(conn.cursor(), doc_id)
+    finally:
+        conn.close()
+
+def delete_documents_under(dir_path: str) -> int:
+    """Deletes every indexed document below dir_path (case-insensitive prefix
+    match on a path-component boundary). Used when a watched sub-folder is
+    deleted: Windows reports only the folder itself, never its files. Returns
+    the number of documents removed."""
+    prefix = dir_path.replace("\\", "/").rstrip("/").lower() + "/"
+    if prefix == "/":
+        return 0
+    # This runs for every non-document deletion the watcher sees (temp files,
+    # bulk deletes), so the candidate set is narrowed in SQL first. LIKE folds
+    # only ASCII case, which is enough: event paths and stored paths share the
+    # same root spelling and on-disk case. The exact check below is in Python.
+    # '!' is the LIKE escape char; prefix has no backslashes after normalizing.
+    escaped = prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, file_path FROM documents WHERE file_path LIKE ? ESCAPE '!'",
+            (escaped + "%",),
+        ).fetchall()
+        doc_ids = [
+            r['id'] for r in rows
+            if r['file_path'].replace("\\", "/").lower().startswith(prefix)
+        ]
+        if doc_ids:
+            with conn:
+                cursor = conn.cursor()
+                for doc_id in doc_ids:
+                    _delete_document_by_id(cursor, doc_id)
+        return len(doc_ids)
+    finally:
+        conn.close()
 
 def is_document_indexed(file_path: str) -> bool:
     """Returns True if the given file path exists in the documents index.
@@ -395,17 +439,19 @@ def get_all_indexed_files() -> dict[str, dict]:
     content_hash. content_hash is None for a document whose indexing was
     interrupted mid-stream; the scanner uses that to resume it."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT file_path, last_modified, file_size, content_hash FROM documents")
-    results = {}
-    for row in cursor.fetchall():
-        results[row['file_path']] = {
-            'last_modified': row['last_modified'],
-            'file_size': row['file_size'],
-            'content_hash': row['content_hash'],
-        }
-    conn.close()
-    return results
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_path, last_modified, file_size, content_hash FROM documents")
+        results = {}
+        for row in cursor.fetchall():
+            results[row['file_path']] = {
+                'last_modified': row['last_modified'],
+                'file_size': row['file_size'],
+                'content_hash': row['content_hash'],
+            }
+        return results
+    finally:
+        conn.close()
 
 def _term_where(term: str) -> tuple[str, str]:
     """Returns a (where_sql, param) pair matching chunks (aliased as c) whose
@@ -432,13 +478,18 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
     queries (e.g. "dma"); the lexical boost promotes documents that literally
     contain the query terms (especially in the file name)."""
     conn = get_db_connection()
+    try:
+        return _query_similar(conn, query_text, query_vector, limit, file_extensions, date_from, date_to)
+    finally:
+        conn.close()
+
+def _query_similar(conn, query_text, query_vector, limit, file_extensions, date_from, date_to) -> list[dict]:
     cursor = conn.cursor()
 
     serialized_query = sqlite_vec.serialize_float32(query_vector)
 
     total = cursor.execute("SELECT COUNT(*) FROM chunk_embeddings").fetchone()[0]
     if total == 0:
-        conn.close()
         return []
 
     # sqlite-vec KNN is brute-force: every embedding is scanned regardless of k,
@@ -595,8 +646,6 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
             # Normalize by total IDF so lexical stays in [0, 1].
             c['lexical'] = score / idf_total
 
-    conn.close()
-
     for c in cand.values():
         c['final'] = c['semantic'] + HYBRID_KEYWORD_WEIGHT * c['lexical']
 
@@ -617,7 +666,6 @@ def query_similar_documents(query_text: str, query_vector: list[float], limit: i
         'similarity': c['final'] / max_final,
     } for c in ranked]
 
-import re
 _PYINSTALLER_TEMP_RE = re.compile(r"^_MEI\d+$", re.IGNORECASE)
 
 def _filter_watch_dirs(dirs: list[str]) -> list[str]:
@@ -639,15 +687,16 @@ def _filter_watch_dirs(dirs: list[str]) -> list[str]:
 def get_monitored_dirs() -> list[str]:
     """Retrieves monitored directories from settings, or returns defaults if empty."""
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key = 'monitored_dirs'")
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'monitored_dirs'").fetchone()
+    finally:
+        conn.close()
 
     if row:
         try:
+            from src.config import normalize_watch_dirs
             dirs = json.loads(row['value'])
-            cleaned = _filter_watch_dirs(dirs)
+            cleaned = normalize_watch_dirs(_filter_watch_dirs(dirs))
             if cleaned != dirs:
                 save_monitored_dirs(cleaned)
             return cleaned
@@ -655,20 +704,19 @@ def get_monitored_dirs() -> list[str]:
             pass
 
     from src.config import get_default_watch_dirs
-    defaults = get_default_watch_dirs()
-    save_monitored_dirs(defaults)
-    return defaults
+    return save_monitored_dirs(get_default_watch_dirs())
 
 def save_monitored_dirs(dirs: list[str]):
-    """Saves monitored directories to settings."""
-    import json
+    """Saves monitored directories to settings (normalized, nested dirs dropped)."""
+    from src.config import normalize_watch_dirs
+    normalized_dirs = normalize_watch_dirs(dirs)
     conn = get_db_connection()
-    cursor = conn.cursor()
-    # Normalize paths
-    normalized_dirs = [d.replace("\\", "/") for d in dirs]
-    cursor.execute(
-        "INSERT OR REPLACE INTO settings (key, value) VALUES ('monitored_dirs', ?)",
-        (json.dumps(normalized_dirs),)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('monitored_dirs', ?)",
+            (json.dumps(normalized_dirs),)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return normalized_dirs

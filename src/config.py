@@ -164,10 +164,58 @@ IGNORED_DIR_NAMES = frozenset({
     "$recycle.bin", "system volume information",
 })
 
-def is_ignored_path(path_str: str) -> bool:
-    """Returns True if any component of the path is an ignored directory name."""
-    parts = path_str.replace("\\", "/").lower().split("/")
-    return any(part in IGNORED_DIR_NAMES for part in parts)
+def _norm_path(path_str: str) -> str:
+    """Normalizes a path for comparisons: forward slashes, lower case, no trailing slash."""
+    return path_str.replace("\\", "/").rstrip("/").lower()
+
+def is_ignored_path(path_str: str, roots=None) -> bool:
+    """Returns True if the path lies under an ignored directory name.
+
+    Only components BELOW the monitored root are checked, so a root that itself
+    sits under e.g. "D:/out" or "D:/vendor" is still indexed. Without roots, or
+    for a path outside every root, all components are checked (conservative).
+    """
+    low = _norm_path(path_str)
+    rel = low
+    if roots:
+        for root in roots:
+            r = _norm_path(str(root))
+            if r and low == r:
+                # The root itself (e.g. the watched folder was deleted).
+                return False
+            if r and low.startswith(r + "/"):
+                rel = low[len(r) + 1:]
+                break
+    parts = rel.split("/")
+    # The last component is the file name itself, not a directory.
+    return any(part in IGNORED_DIR_NAMES for part in parts[:-1])
+
+def normalize_watch_dirs(dirs) -> list[str]:
+    """Normalizes monitored dirs (forward slashes, no trailing slash) and drops
+    duplicates and dirs nested inside another monitored dir, so no file is
+    scanned or watched twice. Keeps the first spelling and the input order."""
+    cleaned = []
+    for d in dirs:
+        s = str(d).strip().replace("\\", "/")
+        if len(s) > 3:
+            s = s.rstrip("/")
+        if s:
+            cleaned.append(s)
+    out = []
+    for d in cleaned:
+        low = _norm_path(d)
+        covered = False
+        for other in cleaned:
+            olow = _norm_path(other)
+            if olow != low and low.startswith(olow + "/"):
+                covered = True
+                break
+        if covered:
+            continue
+        if any(_norm_path(x) == low for x in out):
+            continue
+        out.append(d)
+    return out
 
 # Maximum file size to index (50 MB). Large enough for big technical reference
 # PDFs such as the combined Intel SDM (~27 MB); files above this are skipped.

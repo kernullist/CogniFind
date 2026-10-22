@@ -47,13 +47,17 @@ export async function getSettings(): Promise<{ monitored_dirs: string[] }> {
   return res.json();
 }
 
-export async function setSettings(dirs: string[]): Promise<void> {
+// Returns the folder list as stored by the backend, which normalizes it and
+// drops duplicates and folders nested inside another watched folder.
+export async function setSettings(dirs: string[]): Promise<string[]> {
   const res = await fetch(`${API_BASE}/api/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ monitored_dirs: dirs }),
   });
   if (!res.ok) throw new Error(`Settings save failed: ${res.statusText}`);
+  const data: { monitored_dirs: string[] } = await res.json();
+  return data.monitored_dirs;
 }
 
 // Opens the native folder picker (Rust command). Returns the path, or null if cancelled.

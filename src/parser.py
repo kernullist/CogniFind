@@ -82,26 +82,66 @@ def ocr_pdf(filepath: Path) -> str:
         return ""
     return "\n".join(texts)
 
-def extract_text_from_pdf(filepath: Path) -> str:
-    """Extracts text content from a PDF file, falling back to OCR for scans."""
+def _extract_pdf_text_pymupdf(filepath: Path):
+    """Extracts the PDF text layer with PyMuPDF. Returns None if PyMuPDF is not
+    installed or cannot open the file, so the caller can fall back to pypdf.
+
+    PyMuPDF (already bundled for OCR) is a C library and typically extracts
+    large PDFs many times faster than pure-Python pypdf -- decisive for
+    thousand-page references such as the Intel SDM.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return None
     texts = []
     try:
-        with open(filepath, 'rb') as f:
-            reader = pypdf.PdfReader(f)
-            for page in reader.pages:
-                try:
-                    text = page.extract_text()
-                    if text:
-                        texts.append(text)
-                except Exception as e:
-                    print(f"Warning: Failed to extract page text in PDF {filepath}: {e}")
-                    continue
+        doc = fitz.open(str(filepath))
     except Exception as e:
-        print(f"Error opening PDF {filepath}: {e}")
+        print(f"PyMuPDF could not open {filepath}: {e}; falling back to pypdf.")
+        return None
+    try:
+        for page in doc:
+            try:
+                text = page.get_text("text")
+                if text:
+                    texts.append(text)
+            except Exception as e:
+                print(f"Warning: PyMuPDF failed on a page of {filepath}: {e}")
+                continue
+    finally:
+        doc.close()
+    return "\n".join(texts)
 
-    combined = "\n".join(texts)
-    if combined.strip():
-        return combined
+def extract_text_from_pdf(filepath: Path) -> str:
+    """Extracts text content from a PDF file, falling back to OCR for scans."""
+    fast = _extract_pdf_text_pymupdf(filepath)
+    if fast is not None and fast.strip():
+        return fast
+
+    combined = ""
+    # pypdf only when PyMuPDF is unavailable or could not open the file. If
+    # PyMuPDF opened it and found no text layer, pypdf would not either -- skip
+    # straight to OCR instead of paying a second full parse.
+    if fast is None:
+        texts = []
+        try:
+            with open(filepath, 'rb') as f:
+                reader = pypdf.PdfReader(f)
+                for page in reader.pages:
+                    try:
+                        text = page.extract_text()
+                        if text:
+                            texts.append(text)
+                    except Exception as e:
+                        print(f"Warning: Failed to extract page text in PDF {filepath}: {e}")
+                        continue
+        except Exception as e:
+            print(f"Error opening PDF {filepath}: {e}")
+
+        combined = "\n".join(texts)
+        if combined.strip():
+            return combined
 
     # No embedded text layer -- likely a scanned/image PDF. Try OCR if available.
     print(f"No text layer in PDF {filepath}; attempting OCR fallback...")

@@ -32,6 +32,7 @@ from src.database import (
     insert_embedding,
     delete_chunks,
     delete_document_by_path,
+    delete_documents_under,
     get_all_indexed_files
 )
 from src.parser import extract_text, chunk_text
@@ -78,6 +79,10 @@ class IndexingWorker(QThread):
         self.scanning_complete = False
         self.walker = None
 
+        # Set by scan_and_sync() from other threads (API / tray); consumed by
+        # run() so the walker and db_files are only ever touched by this thread.
+        self._rescan_requested = False
+
     def disk_file_generator(self):
         """Yields supported file paths from monitored directories one by one."""
         for directory in self.monitored_dirs:
@@ -102,7 +107,7 @@ class IndexingWorker(QThread):
                 break
             # Remove files that no longer exist, or that now fall under an ignored
             # directory (e.g. after enabling/expanding the ignore rules).
-            if not os.path.exists(filepath_str) or is_ignored_path(filepath_str):
+            if not os.path.exists(filepath_str) or is_ignored_path(filepath_str, self.monitored_dirs):
                 delete_document_by_path(filepath_str)
                 deleted_count += 1
 
@@ -123,6 +128,11 @@ class IndexingWorker(QThread):
         
         # Main event processing loop
         while self.is_running:
+            # 0. Manual rescan requested from another thread.
+            if self._rescan_requested:
+                self._rescan_requested = False
+                self._reset_scan()
+
             # 1. Handle debounced files (priority!)
             now = time.time()
             files_to_index = []
@@ -208,15 +218,24 @@ class IndexingWorker(QThread):
         time.sleep(0.01)
 
     def scan_and_sync(self):
-        """Triggers a manual re-scan by resetting the generator state."""
+        """Requests a manual re-scan. Thread-safe and non-blocking: the worker
+        thread performs the purge and restarts the walk on its next loop pass,
+        so callers (the API event loop, the tray) never block on DB work or
+        race the walker that run() is iterating."""
+        self._rescan_requested = True
+        print("Manual scan requested.")
+
+    def _reset_scan(self):
+        """Restarts the directory walk from scratch. Worker thread only.
+
+        Pending debounced events are kept: they are newer than the scan
+        snapshot and dropping them would lose edits made just before the
+        request. Already-queued files are re-discovered by the new walk."""
         with self.lock:
             self.queue.clear()
-            self.debounce_queue.clear()
             self.scanning_complete = False
-            
         self.purge_deleted_files()
         self.walker = self.disk_file_generator()
-        print("Manual scan reset triggered.")
 
     def index_file(self, filepath_str: str):
         """Extracts text, chunks it, generates embeddings with throttling, and updates DB."""
@@ -328,7 +347,7 @@ class IndexingWorker(QThread):
         """Queues file for debounced indexing."""
         filepath_str = filepath_str.replace("\\", "/")
         # Skip files under ignored directories (build output, deps, VCS, etc.).
-        if is_ignored_path(filepath_str):
+        if is_ignored_path(filepath_str, self.monitored_dirs):
             return
         with self.lock:
             self.debounce_queue[filepath_str] = time.time()
@@ -355,12 +374,28 @@ class FileWatchHandler(FileSystemEventHandler):
                 self.worker.queue_file_for_indexing(event.src_path)
 
     def on_deleted(self, event):
-        if not event.is_directory:
-            ext = os.path.splitext(event.src_path)[1].lower()
-            if ext in SUPPORTED_EXTENSIONS:
-                # Direct delete (no debouncing needed for deletes)
-                filepath_str = event.src_path.replace("\\", "/")
-                delete_document_by_path(filepath_str)
+        # Direct delete (no debouncing needed for deletes).
+        filepath_str = event.src_path.replace("\\", "/")
+        ext = os.path.splitext(filepath_str)[1].lower()
+        if not event.is_directory and ext in SUPPORTED_EXTENSIONS:
+            delete_document_by_path(filepath_str)
+            return
+        # The Windows emitter reports every removal as FileDeletedEvent -- the
+        # path is already gone, so it cannot tell a folder from a file -- and
+        # emits nothing for the folder's contents. Treat any other removal as a
+        # possible folder and drop indexed documents beneath it (a deleted
+        # extension-less file simply matches nothing). Skip if the path still
+        # exists as a folder, so a stale/replayed event cannot wipe live files.
+        # Deletions inside ignored dirs (node_modules churn during an install,
+        # build output) can arrive by the tens of thousands and can never hold
+        # indexed documents, so they skip the DB entirely.
+        roots = self.worker.monitored_dirs if self.worker is not None else None
+        if is_ignored_path(filepath_str, roots):
+            return
+        if not os.path.isdir(filepath_str):
+            removed = delete_documents_under(filepath_str)
+            if removed:
+                print(f"Folder removed: {filepath_str}; dropped {removed} documents.")
 
     def on_moved(self, event):
         if not event.is_directory:

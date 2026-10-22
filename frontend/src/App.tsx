@@ -136,6 +136,7 @@ export default function App() {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchIdRef = useRef(0);
+  const saveSeqRef = useRef(0);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -274,9 +275,25 @@ export default function App() {
     }
   }, []);
 
-  const saveFolders = useCallback((next: string[]) => {
+  // Optimistically show `next`, then adopt the backend's stored list (it drops
+  // duplicates and nested folders). Only the latest save may write back, so a
+  // slow earlier response cannot overwrite a newer list. On failure, reload
+  // what is actually saved.
+  const saveFolders = useCallback(async (next: string[]) => {
+    const seq = ++saveSeqRef.current;
     setFolders(next);
-    setSettings(next).catch((e) => console.error("Settings save error:", e));
+    try {
+      const stored = await setSettings(next);
+      if (seq === saveSeqRef.current) setFolders(stored);
+    } catch (e) {
+      console.error("Settings save error:", e);
+      try {
+        const s = await getSettings();
+        if (seq === saveSeqRef.current) setFolders(s.monitored_dirs);
+      } catch {
+        // Backend unreachable; keep the optimistic list.
+      }
+    }
   }, []);
 
   const handleAddFolder = useCallback(async () => {
@@ -286,29 +303,30 @@ export default function App() {
       const picked = await pickFolder();
       if (picked) {
         const norm = picked.replace(/\\/g, "/");
-        setFolders((prev) => {
-          if (prev.some((f) => f.toLowerCase() === norm.toLowerCase())) return prev;
-          const next = [...prev, norm];
-          setSettings(next).catch((e) => console.error("Settings save error:", e));
-          return next;
-        });
+        // Side effects stay out of state updaters (StrictMode runs those twice).
+        if (!folders.some((f) => f.toLowerCase() === norm.toLowerCase())) {
+          await saveFolders([...folders, norm]);
+        }
       }
     } catch (e) {
       console.error("Folder pick error:", e);
     } finally {
       setFolderBusy(false);
     }
-  }, [folderBusy]);
+  }, [folderBusy, folders, saveFolders]);
 
   const handleRemoveFolder = useCallback(
-    (dir: string) => saveFolders(folders.filter((f) => f !== dir)),
+    (dir: string) => {
+      saveFolders(folders.filter((f) => f !== dir));
+    },
     [folders, saveFolders]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIdx((prev) => Math.min(prev + 1, results.length - 1));
+      // Clamp at 0 too: with no results, length - 1 is -1.
+      setSelectedIdx((prev) => Math.max(0, Math.min(prev + 1, results.length - 1)));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelectedIdx((prev) => Math.max(prev - 1, 0));

@@ -96,7 +96,13 @@ fn start_backend_sidecar(app: &tauri::AppHandle, state: &AppState) {
             // Pass our PID so the backend can self-terminate if this process dies
             // unexpectedly (crash / Task Manager kill) without going through the
             // normal stop path -- otherwise the onefile child would orphan.
-            let cmd = cmd.env("COGNIFIND_PARENT_PID", std::process::id().to_string());
+            let mut cmd = cmd.env("COGNIFIND_PARENT_PID", std::process::id().to_string());
+            // Debug builds load the UI from the Vite dev server, whose origin the
+            // frozen backend rejects unless told otherwise. Release builds never
+            // set this, so the shipped backend trusts only the Tauri origin.
+            if cfg!(debug_assertions) {
+                cmd = cmd.env("COGNIFIND_DEV_ORIGIN", "1");
+            }
             match cmd.spawn() {
                 Ok((_rx, child)) => {
                     log::info!("Python backend sidecar started");

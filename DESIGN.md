@@ -99,7 +99,7 @@ graph TD
 
 - **파서 팩토리**: 파일 확장자별 라이브러리를 연동하여 비정형 데이터를 일반 텍스트로 추출합니다.
   - `.txt`, `.md`: 기본 UTF-8 디코딩 (cp949, euc-kr, latin1, utf-16 폴백)
-  - `.pdf`: `pypdf`
+  - `.pdf`: `PyMuPDF` 우선(빠름), 미설치/열기 실패 시 `pypdf`, 텍스트 레이어가 없으면 OCR
   - `.docx`: `python-docx`
   - `.xlsx`: `openpyxl`
 - **텍스트 청크 분할 (Chunking)**: 임베딩 모델의 최대 토큰 입력 한계(예: 512 토큰) 및 매칭 정확도를 고려하여 텍스트를 일정 크기로 분할합니다.
@@ -364,6 +364,13 @@ C:\Program Files\CogniFind\
 > - `QThread.IdlePriority`로 스레드 우선순위 최소화
 
 ---
+
+### 9.5 로컬 API 보호
+
+- Host 헤더 허용 목록(127.0.0.1/localhost, 포트 유무 모두): DNS rebinding 차단. 불일치 시 421.
+- Origin 헤더가 있으면 Tauri/Vite 출처만 허용(403). Origin 없는 요청(트레이, curl)은 허용.
+- `/api/open-file` 은 색인된 경로만 실행.
+- 근거와 대안 비교: `docs/plan/2026-10-22-bugfix-and-hardening.md`
 
 ## 10. 향후 개선 사항
 
